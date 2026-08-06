@@ -59,7 +59,8 @@ BSPLAYERS ?= " \\
 EXTRALAYERS ?= ""
 
 BBLAYERS = " \\
-  \${OEROOT}/layers/meta-toradex-torizon \\
+  \${OEROOT}/layers/meta-torizon-bsp \\
+  \${OEROOT}/layers/meta-torizon \\
   \${BASELAYERS} \\
   \${BSPLAYERS} \\
   \${EXTRALAYERS} \\

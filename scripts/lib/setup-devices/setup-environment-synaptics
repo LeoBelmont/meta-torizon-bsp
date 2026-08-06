@@ -118,7 +118,8 @@ BBLAYERS += " \\
 "
 
 # Torizon
-BBLAYERS += "${_TDX_LAYERS_DIR}/meta-toradex-torizon"
+BBLAYERS += "${_TDX_LAYERS_DIR}/meta-torizon-bsp"
+BBLAYERS += "${_TDX_LAYERS_DIR}/meta-torizon"
 # Torizon deps
 BBLAYERS += "${_TDX_LAYERS_DIR}/meta-updater"
 

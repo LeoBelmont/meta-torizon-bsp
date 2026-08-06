@@ -52,7 +52,8 @@ OEROOT := "\${@os.path.abspath(os.path.dirname(d.getVar('FILE', True)))}/../.."
 # Intel
 BBLAYERS += "\${OEROOT}/layers/meta-intel"
 # Torizon
-BBLAYERS += "\${OEROOT}/layers/meta-toradex-torizon"
+BBLAYERS += "\${OEROOT}/layers/meta-torizon-bsp"
+BBLAYERS += "\${OEROOT}/layers/meta-torizon"
 # Torizon deps
 BBLAYERS += "\${OEROOT}/layers/meta-updater"
 BBLAYERS += "\${OEROOT}/layers/meta-virtualization"

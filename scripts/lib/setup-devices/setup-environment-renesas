@@ -41,7 +41,8 @@ fi
 
 tdx_append_once /build/conf/bblayers.conf "# Torizon" <<EOF
 # Torizon
-BBLAYERS += "\${TOPDIR}/../work/meta-toradex-torizon"
+BBLAYERS += "\${TOPDIR}/../work/meta-torizon-bsp"
+BBLAYERS += "\${TOPDIR}/../work/meta-torizon"
 # Torizon deps
 BBLAYERS += "\${TOPDIR}/../work/meta-updater"
 BBLAYERS += "\${TOPDIR}/../work/meta-virtualization"

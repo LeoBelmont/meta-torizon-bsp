@@ -21,7 +21,7 @@ case "${DISTRO}" in
         ;;
 esac
 
-# Resolve where this checkout's meta-toradex-torizon layer (and therefore
+# Resolve where this checkout's meta-torizon-bsp layer (and therefore
 # scripts/lib/core.sh and the vendor scripts) lives, then source core.sh as
 # early as possible.
 _TDX_SOURCE_PATH=""
@@ -36,12 +36,12 @@ if [ -n "${_TDX_SOURCE_PATH}" ]; then
     _TDX_SOURCE_PATH=$(readlink -f "${_TDX_SOURCE_PATH}" 2>/dev/null || echo "${_TDX_SOURCE_PATH}")
     _TDX_LAYERS_DIR=$(cd "$(dirname "${_TDX_SOURCE_PATH}")/../.." >/dev/null 2>&1 && pwd)
 else
-    _TDX_LAYERS_DIR=$(find ~+ -maxdepth 2 -type d -name meta-toradex-torizon 2>/dev/null)
+    _TDX_LAYERS_DIR=$(find ~+ -maxdepth 2 -type d -name meta-torizon-bsp 2>/dev/null)
     _TDX_LAYERS_DIR=$(dirname "${_TDX_LAYERS_DIR}")
 fi
-_TDX_SCRIPTS_PATH="${_TDX_LAYERS_DIR}"/meta-toradex-torizon/scripts/lib/setup-devices
+_TDX_SCRIPTS_PATH="${_TDX_LAYERS_DIR}"/meta-torizon-bsp/scripts/lib/setup-devices
 
-. "${_TDX_LAYERS_DIR}"/meta-toradex-torizon/scripts/lib/core.sh
+. "${_TDX_LAYERS_DIR}"/meta-torizon-bsp/scripts/lib/core.sh
 
 # Cleanup is a single explicit call at the very end (see _tdx_dispatch below),
 # NOT a `trap ... RETURN`. Bash fires a RETURN trap on the completion of
