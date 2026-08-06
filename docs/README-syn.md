@@ -7,6 +7,7 @@ $ mkdir common-torizon; cd common-torizon
 $ repo init -u https://git.toradex.com/toradex-manifest.git -b scarthgap-7.x.y -m common-torizon/syn/integration.xml
 $ repo sync -j 10
 ```
+> Manifests for Wrynose are still under development
 
 > [!IMPORTANT]
 > Until an official release of Common Torizon OS, only the `integration.xml` manifest is suitable for end-users to build. After an official release, users will be able to use the `default.xml` manifest.
@@ -117,14 +118,15 @@ For example:
 $ git clone https://github.com/synaptics-astra/sdk.git -b scarthgap_6.12_v2.1.0 layers
 ```
 
-  * Download `meta-toradex-torizon` and its dependencies:
+  * Download `meta-torizon`, `meta-torizon-bsp`, and their dependencies:
 ```bash
 $ cd layers
-$ git clone https://github.com/torizon/meta-toradex-torizon.git -b scarthgap-7.x.y
-$ git clone https://github.com/uptane/meta-updater.git -b scarthgap
+$ git clone https://github.com/torizon/meta-torizon.git -b master
+$ git clone https://github.com/torizon/meta-torizon-bsp.git -b master
+$ git clone https://github.com/uptane/meta-updater.git -b master
 ```
   * Go back to our top folder `common-torizon`;
   * Create a symlink to our `setup-environment`:
 ```bash
-$ ln -s layers/meta-toradex-torizon/scripts/setup-environment setup-environment
+$ ln -s layers/meta-torizon-bsp/scripts/setup-environment setup-environment
 ```

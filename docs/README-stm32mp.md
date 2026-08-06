@@ -22,6 +22,7 @@ $ cd ~/yocto-workdir
 ```
 $ repo init -u https://git.toradex.com/toradex-manifest.git -b scarthgap-7.x.y -m torizon/default.xml
 ```
+> Manifests for Wrynose are still under development
 5. Sync the repositories:
 ```
 $ repo sync

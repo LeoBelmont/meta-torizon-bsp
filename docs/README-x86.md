@@ -7,6 +7,8 @@ $ mkdir common-torizon; cd common-torizon
 $ repo init -u https://git.toradex.com/toradex-manifest.git -b scarthgap-7.x.y -m common-torizon/x86/default.xml
 $ repo sync -j 10
 ```
+> Manifests for Wrynose are still under development
+
 We **strongly recommend** using the `default.xml` manifest. The `integration.xml` and `next.xml` are development manifests used internally and they might be unstable.
 `default.xml` is the manifest used for our releases, so they are reliable.  
 > [!IMPORTANT]  
@@ -70,25 +72,25 @@ $ mkdir layers; cd layers
 2. Clone the layers needed to build x86 Common Torizon:  
   * Download Poky
 ```bash
-$ git clone git://git.yoctoproject.org/poky -b scarthgap
+$ git clone git://git.yoctoproject.org/poky -b master
 ```
-  * Download `meta-intel` and `meta-toradex-torizon`:
+  * Download `meta-intel`, `meta-torizon`, and `meta-torizon-bsp`:
 ```bash
-$ git clone git://git.yoctoproject.org/meta-intel -b scarthgap
-$ git clone https://github.com/torizon/meta-toradex-torizon.git -b scarthgap-7.x.y
+$ git clone git://git.yoctoproject.org/meta-intel -b master
+$ git clone https://github.com/torizon/meta-torizon.git -b master
+$ git clone https://github.com/torizon/meta-torizon-bsp.git -b master
 ```
-  * Download `meta-toradex-torizon` dependencies:
+  * Download the Torizon OS layers' dependencies:
 ```bash
-$ git clone https://github.com/uptane/meta-updater.git -b scarthgap
-$ git clone https://git.yoctoproject.org/meta-virtualization -b scarthgap
+$ git clone https://github.com/uptane/meta-updater.git -b master
+$ git clone https://git.yoctoproject.org/meta-virtualization -b master
 ```
   * And finally, download `meta-updater` and `meta-virtualization` dependency: 
 ```bash
-$ git clone https://github.com/openembedded/meta-openembedded -b scarthgap
+$ git clone https://github.com/openembedded/meta-openembedded -b master
 ```
   * Go back into our top folder `common-torizon`
   * Create a symlink to our `setup-environment`:
 ```bash
-$ ln -s layers/meta-toradex-torizon/scripts/setup-environment setup-environment
+$ ln -s layers/meta-torizon-bsp/scripts/setup-environment setup-environment
 ```
-
