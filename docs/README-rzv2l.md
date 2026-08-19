@@ -2,28 +2,29 @@ Setup
 ======
 1. Clone Renesas BSP layer:
 ```
-$ git clone https://github.com/renesas-rz/rz-community-bsp.git -b scarthgap
+$ git clone https://github.com/renesas-rz/rz-community-bsp.git -b wrynose
 $ cd rz-community-bsp
 ```
-2. Clone meta-toradex-torizon into `rz-community-bsp` folder
+2. Clone `meta-torizon` and `meta-torizon-bsp` into the `rz-community-bsp` folder
 ```
-$ git clone https://github.com/torizon/meta-toradex-torizon.git -b scarthgap-7.x.y
+$ git clone https://github.com/torizon/meta-torizon.git -b master
+$ git clone https://github.com/torizon/meta-torizon-bsp.git -b master
 ```
 3. Clone Torizon dependencies into `rz-community-bsp`
 ```
-$ git clone https://github.com/uptane/meta-updater.git -b scarthgap
-$ git clone https://git.yoctoproject.org/meta-virtualization -b scarthgap
+$ git clone https://github.com/uptane/meta-updater.git -b master
+$ git clone https://git.yoctoproject.org/meta-virtualization -b master
 ```
 4. Create a symlink to our `setup-environment`:
 ```bash
-$ ln -s meta-toradex-torizon/scripts/setup-environment setup-environment
+$ ln -s meta-torizon-bsp/scripts/setup-environment setup-environment
 ```
 
 Build
 ======
 1. Build with the following commands, inside `rz-community-bsp`
 ```
-$ ./kas-container shell --update --force-checkout kas/yocto/scarthgap.yml:kas/opt/debug.yml:kas/image/renesas-image-demo.yml:kas/machine/smarc-rzg2l.yml:kas/kernel/cip-6.1.yml
+$ ./kas-container shell --update --force-checkout kas/yocto/wrynose.yml:kas/opt/debug.yml:kas/image/renesas-image-demo.yml:kas/machine/smarc-rzg2l.yml:kas/kernel/cip-6.1.yml
 $ cd /repo
 $ MACHINE=smarc-rzv2l . setup-environment
 $ bitbake torizon-docker

@@ -143,7 +143,8 @@ tdx_apply_integration_override conf/local.conf
 if tdx_needs_once conf/bblayers.conf; then
   tdx_append_once conf/bblayers.conf "# Torizon" <<EOF
 # Torizon
-BBLAYERS += "\${OEROOT}/sources/meta-toradex-torizon"
+BBLAYERS += "\${OEROOT}/sources/meta-torizon-bsp"
+BBLAYERS += "\${OEROOT}/sources/meta-torizon"
 BBLAYERS += "\${OEROOT}/sources/meta-updater"
 
 OEROOT := "\${@os.path.abspath(os.path.dirname(d.getVar('FILE', True)))}/../.."

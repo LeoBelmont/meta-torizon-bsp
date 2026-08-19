@@ -53,8 +53,8 @@ _tdx_lib_conf_path() {
         return 0
     fi
     if [ -n "${_TDX_LAYERS_DIR:-}" ] && \
-       [ -f "${_TDX_LAYERS_DIR}/meta-toradex-torizon/scripts/lib/${fname}" ]; then
-        printf '%s\n' "${_TDX_LAYERS_DIR}/meta-toradex-torizon/scripts/lib/${fname}"
+       [ -f "${_TDX_LAYERS_DIR}/meta-torizon-bsp/scripts/lib/${fname}" ]; then
+        printf '%s\n' "${_TDX_LAYERS_DIR}/meta-torizon-bsp/scripts/lib/${fname}"
         return 0
     fi
     return 1
@@ -82,7 +82,7 @@ tdx_compute_oeroot() {
     # Preserve the dispatcher's own _TDX_LAYERS_DIR if it already resolved one
     : "${_TDX_LAYERS_DIR:=${_TDX_OEROOT}/layers}"
     _TDX_MANIFESTS="${_TDX_OEROOT}/.repo/manifests"
-    _TDX_SCRIPTS="${_TDX_LAYERS_DIR}/meta-toradex-torizon/scripts"
+    _TDX_SCRIPTS="${_TDX_LAYERS_DIR}/meta-torizon-bsp/scripts"
 }
 
 # tdx_set_builddir <builddir name> <distro>

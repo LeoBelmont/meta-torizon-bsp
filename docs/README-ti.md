@@ -7,6 +7,8 @@ $ mkdir common-torizon; cd common-torizon
 $ repo init -u https://git.toradex.com/toradex-manifest.git -b scarthgap-7.x.y -m common-torizon/ti/default.xml
 $ repo sync -j 10
 ```
+> Manifests for Wrynose are still under development
+
 We **strongly recommend** using the `default.xml` manifest. The `integration.xml` and `next.xml` are development manifests used internally and they might be unstable.
 `default.xml` is the manifest used for our releases, so they are reliable.  
 > [!IMPORTANT]  
@@ -72,22 +74,23 @@ $ git clone https://git.yoctoproject.org/meta-yocto -b scarthgap
 ```
   * Download `meta-ti` and its dependencies:
 ```bash
-$ git clone https://git.yoctoproject.org/meta-ti -b scarthgap
-$ git clone https://git.yoctoproject.org/meta-arm -b scarthgap
-$ git clone https://git.yoctoproject.org/openembedded-core -b scarthgap oe-core
+$ git clone https://git.yoctoproject.org/meta-ti -b master
+$ git clone https://git.yoctoproject.org/meta-arm -b master
+$ git clone https://git.yoctoproject.org/openembedded-core -b master oe-core
 ```
-  * Download `meta-toradex-torizon` and its dependencies:
+  * Download `meta-torizon`, `meta-torizon-bsp`, and their dependencies:
 ```bash
-$ git clone https://github.com/torizon/meta-toradex-torizon.git -b scarthgap-7.x.y
-$ git clone https://github.com/uptane/meta-updater.git -b scarthgap
-$ git clone https://git.yoctoproject.org/meta-virtualization -b scarthgap
+$ git clone https://github.com/torizon/meta-torizon.git -b master
+$ git clone https://github.com/torizon/meta-torizon-bsp.git -b master
+$ git clone https://github.com/uptane/meta-updater.git -b master
+$ git clone https://git.yoctoproject.org/meta-virtualization -b master
 ```
   * And finally, download the dependency for `meta-updater` and `meta-virtualization`:
 ```bash
-$ git clone https://github.com/openembedded/meta-openembedded -b scarthgap
+$ git clone https://github.com/openembedded/meta-openembedded -b master
 ```
   * Go back to our top folder `common-torizon`;
   * Create a symlink to our `setup-environment`:
 ```bash
-$ ln -s sources/meta-toradex-torizon/scripts/setup-environment setup-environment
+$ ln -s sources/meta-torizon-bsp/scripts/setup-environment setup-environment
 ```

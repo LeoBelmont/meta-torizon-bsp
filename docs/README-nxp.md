@@ -7,6 +7,8 @@ $ mkdir common-torizon; cd common-torizon
 $ repo init -u https://git.toradex.com/toradex-manifest.git -b scarthgap-7.x.y -m common-torizon/nxp/default.xml
 $ repo sync -j 10
 ```
+> Manifests for Wrynose are still under development
+
 We **strongly recommend** using the `default.xml` manifest. The `integration.xml` and `next.xml` are development manifests used internally and they might be unstable.
 `default.xml` is the manifest used for our releases, so they are reliable.  
 
@@ -67,14 +69,15 @@ $ mkdir common-torizon; cd common-torizon
 ```
 2. Clone NXP's BSP layers:
 ```bash
-$ repo init -u https://github.com/nxp-imx/imx-manifest.git -b imx-linux-scarthgap -m imx-6.6.52-2.2.0.xml
+$ repo init -u https://github.com/nxp-imx/imx-manifest.git -b imx-linux-wrynose -m imx-6.6.52-2.2.0.xml
 $ repo sync -j 10
 ```
-3. Clone `meta-toradex-torizon` layer, and its dependencies:
+3. Clone the `meta-torizon` and `meta-torizon-bsp` layers and their dependencies:
 ```bash
-$ git clone https://github.com/torizon/meta-toradex-torizon.git -b scarthgap-7.x.y sources/meta-toradex-torizon
-$ git clone https://github.com/uptane/meta-updater.git -b scarthgap sources/meta-updater
-$ ln -s sources/meta-toradex-torizon/scripts/setup-environment setup-environment
+$ git clone https://github.com/torizon/meta-torizon.git -b master sources/meta-torizon
+$ git clone https://github.com/torizon/meta-torizon-bsp.git -b master sources/meta-torizon-bsp
+$ git clone https://github.com/uptane/meta-updater.git -b master sources/meta-updater
+$ ln -s sources/meta-torizon-bsp/scripts/setup-environment setup-environment
 ```
 
 Additional Setup for i.MX93 FRDM boards
