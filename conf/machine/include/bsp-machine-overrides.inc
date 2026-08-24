@@ -1,7 +1,17 @@
 # Machine / SoC-family distro-config overrides shared by Torizon distro
 # families.
-IMX_DEFAULT_BSP = "nxp"
-IMX_DEFAULT_BSP:upstream = "mainline"
+#
+# Default to "nxp": Toradex machines get their own IMX_DEFAULT_BSP from
+# TDX_BSP_VARIANT (tdx-nxp-*.inc / tdx-upstream-mainline*.inc), and
+# Common Torizon NXP machines have no such chain, so both need "nxp".
+#
+# TDX_BSP_VARIANT is checked directly rather than via a :upstream
+# override (collides with torizon-upstream[-rt].conf's DISTROOVERRIDES
+# flag) or MACHINEOVERRIDES (circular: it's partly derived from
+# IMX_DEFAULT_BSP itself). The mainline values are an explicit list, not
+# a prefix match, so adding a new variant is a deliberate edit here.
+TDX_BSP_VARIANT_MAINLINE_VALUES = "tdx-upstream-mainline tdx-upstream-mainline-rt"
+IMX_DEFAULT_BSP = "${@'mainline' if d.getVar('TDX_BSP_VARIANT') in d.getVar('TDX_BSP_VARIANT_MAINLINE_VALUES').split() else 'nxp'}"
 
 IMAGE_BOOT_FILES_REMOVE:append:apalis-imx8 = " hdmitxfw.bin dpfw.bin"
 IMAGE_CLASSES:append = " torizon-image-machine"
