@@ -140,13 +140,30 @@ jetson-orin-nano-devkit-nvme login:
 ```
 4. Login to the board using the `torizon/torizon` credentials.
 
-Run NVIDIA docker
+Run NVIDIA containers
 ======
 
-The NVIDIA container runtime is included in all Jetson configurations for Torizon.
+These images do not include the NVIDIA container runtime (`nvidia-container-toolkit`). To use the GPU from a container, pass the required device nodes in yourself and provide the matching NVIDIA L4T userspace (CUDA, EGL/GLES, etc.) inside the container image, since the Torizon host does not ship any GPU userspace.
 
-Use `docker run --runtime nvidia` to run containerized NVIDIA applications. For example, to run the `stable-diffusion` tutorial from the NVIDIA Jetson AI Lab (https://www.jetson-ai-lab.com/archive/tutorial_stable-diffusion.html) use the following command in Torizon:
+The GPU device nodes differ by machine, because the GPU and its kernel driver differ:
+
+ * Jetson Orin Nano (Tegra234) exposes the Tegra `nvgpu` nodes: `/dev/nvhost-*`, `/dev/nvgpu/*` and `/dev/nvmap`.
+ * Jetson AGX Thor (Tegra264) exposes the standard NVIDIA driver nodes: `/dev/nvidia*` (for example `/dev/nvidia0`, `/dev/nvidiactl`, `/dev/nvidia-uvm`).
+
+List what is actually present on the target before running a container:
 
 ```
-sudo docker run --runtime nvidia -it --rm --network=host dustynv/stable-diffusion-webui:r36.2.0
+$ ls /dev/nvidia* /dev/nvhost* /dev/nvgpu /dev/nvmap 2>/dev/null
 ```
+
+Pass the nodes your workload needs into the container. For example, on the Jetson Orin Nano:
+
+```
+sudo docker run -it --rm --network=host \
+  --device /dev/nvhost-gpu --device /dev/nvhost-ctrl-gpu \
+  --device /dev/nvhost-as-gpu --device /dev/nvhost-ctrl \
+  --device /dev/nvmap --device /dev/nvgpu \
+  <your-cuda-image>
+```
+
+Adjust the device list to match what the command above lists on your target.

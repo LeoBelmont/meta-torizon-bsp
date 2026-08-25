@@ -11,8 +11,6 @@ BBMASK += "meta-tegra/external/sota/recipes-bsp/uefi/edk2-firmware-tegra_%.bbapp
 
 do_image_tegraflash_tar[depends] += " tegra-minimal-initramfs:do_image_complete"
 
-IMAGE_INSTALL:append:tegra = " nvidia-container-toolkit"
-
 MACHINE_EXTRA_RDEPENDS:remove = " tegra-redundant-boot"
 
 # meta-tegra uses A/B layout, we don't want it here.
