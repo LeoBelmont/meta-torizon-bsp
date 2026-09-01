@@ -449,6 +449,7 @@ tdx_apply_integration_override() {
 # always get the newest software (u-boot, kernel, aktualizr-torizon, etc).
 # Building on integration without use-head-next your build may fail.
 DISTROOVERRIDES .= ":use-head-next"
+INHERIT += "buildhistory"
 EOF
 }
 
