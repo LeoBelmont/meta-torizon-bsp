@@ -6,14 +6,17 @@ from the layer's files/ dir."
 LICENSE = "CLOSED"
 
 PROVIDES = "virtual/dtb"
-COMPATIBLE_MACHINE = "rudi-nx"
+COMPATIBLE_MACHINE = "(rudi-nx|rudi-nx-nano)"
 
 inherit deploy
 
 # Capture the recipe dir at parse time so it survives into the task shell.
 CTI_FILES := "${THISDIR}/files"
 
+# Orin NX carrier DTB by default; the Orin Nano module on the same Rudi-NX
+# carrier needs its own kernel DTB (the CTI overlay is shared).
 CTI_KDTB = "tegra234-orin-nx-cti-NGX010.dtb"
+CTI_KDTB:rudi-nx-nano = "tegra234-orin-nano-cti-NGX010.dtb"
 CTI_OVERLAY = "tegra234-orin-nx-cti-overlay.dtbo"
 
 do_fetch[noexec] = "1"
