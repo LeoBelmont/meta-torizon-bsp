@@ -4,8 +4,6 @@ TEGRA_ESSENTIAL_EXTRA_RDEPENDS:remove = " \
 
 OSTREE_KERNEL_ARGS:append = " ${KERNEL_ARGS} root=/dev/${TNSPEC_BOOTDEV} rootfstype=ext4 rootwait"
 
-OSTREE_KERNEL_ARGS:append = " quiet splash plymouth.ignore-serial-consoles vt.global_cursor_default=0"
-
 IMAGE_TEGRAFLASH_KERNEL = "${DEPLOY_DIR_IMAGE}/tegra-minimal-initramfs-${MACHINE}.cboot"
 IMAGE_TEGRAFLASH_FS_TYPE:tegra = "ota-ext4"
 
