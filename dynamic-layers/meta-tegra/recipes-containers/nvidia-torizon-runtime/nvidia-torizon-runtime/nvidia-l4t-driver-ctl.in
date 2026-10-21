@@ -1,0 +1,211 @@
+#!/bin/sh
+# Manages the nvidia-l4t-driver container for nvidia-torizon-runtime.
+#
+#   start      Make sure the driver container for this OS release is running:
+#              replace one left from another L4T release, load the image
+#              shipped with the OS or else pull it if needed, start it. Called by nvidia-torizon-runtime on the first
+#              GPU container; shows the progress on the waiting docker
+#              client's terminal (see say), and on failure prints the reason
+#              on stdout for the runtime to report.
+#   reconcile  Run once dockerd is up (nvidia-l4t-driver-reconcile.service):
+#              after an OS update, replace the driver container of the old L4T
+#              release, and restart the GPU containers that failed to start
+#              while dockerd was restoring them (dockerd never retries those).
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+# <repository>:<L4T version> of this OS image, set at build time
+IMAGE="@NVIDIA_L4T_DRIVER_IMAGE@"
+NAME=nvidia-l4t-driver
+# logs go to the journal: nothing of ours stays on the host once the driver
+# container stops
+TAG=nvidia-torizon-runtime
+SEE="see journalctl -t $TAG"
+# The driver container image shipped with the OS, if any: a `docker save`
+# archive of $IMAGE, named after its tag (the L4T version) so that an archive
+# of another release is never loaded. Preferred over downloading: it's there
+# without internet access, and every OS update brings the matching one.
+BUNDLE=/usr/share/nvidia-l4t-driver/nvidia-l4t-driver-${IMAGE##*:}.tar
+
+log() { logger -t "$TAG" -- "$*"; }
+# run a command, logging its output; keeps its exit status
+logged() {
+    out=$("$@" 2>&1)
+    rc=$?
+    [ -n "$out" ] && printf '%s\n' "$out" | logger -t "$TAG"
+    return $rc
+}
+
+# Messages for the user. During "start", our stderr is the GPU container's
+# stderr, which dockerd only relays once the runtime's "create" returns, i.e.
+# after we are done: anything written there shows up at the end, all at once.
+# So when the docker clients waiting for us have a terminal (TTYS, see
+# client_ttys), write to it directly instead; otherwise (no terminal, e.g.
+# deployments or scripts) fall back to stderr, for the container's output.
+TTYS=
+say() {
+    log "$*"
+    if [ -n "$TTYS" ]; then
+        for t in $TTYS; do printf '%s: %s\r\n' "$TAG" "$*" > "$t"; done
+    else
+        echo "$TAG: $*" >&2
+    fi
+}
+
+# Terminals of the docker clients that may be waiting for this GPU container:
+# docker CLI processes whose stderr is a terminal, running "run"/"create"
+# with the nvidia runtime, or "start"/"restart"/"compose" (which don't name
+# the runtime). Other interactive containers, e.g. a `docker run -it debian`
+# session, are left alone. The runtime can't tell which client asked for the
+# container, so if several such commands wait at once, all get the messages.
+client_ttys() {
+    docker_bin=$(readlink -f "$(command -v docker)")
+    for p in /proc/[0-9]*; do
+        [ "$(readlink "$p/exe" 2>/dev/null)" = "$docker_bin" ] || continue
+        args=" $(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) "
+        case "$args" in
+            *" compose "* | *" start "* | *" restart "*) ;;
+            *" run "* | *" create "*)
+                case "$args" in
+                    *" --runtime nvidia "* | *" --runtime=nvidia "*) ;;
+                    *) continue ;;
+                esac
+                ;;
+            *) continue ;;
+        esac
+        t=$(readlink "$p/fd/2" 2>/dev/null)
+        case "$t" in /dev/pts/* | /dev/tty*) [ -w "$t" ] && echo "$t" ;; esac
+    done | sort -u | tr '\n' ' '
+}
+
+# A terminal in raw mode (docker run -it) doesn't turn "\n" into "\r\n", so
+# docker's progress bars would be garbled there.
+tty_cooked() {
+    stty -F "$1" -a 2> /dev/null | grep -qw onlcr
+}
+
+driver_image() {
+    timeout 10 docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null
+}
+
+# Remove a driver container made from another image, i.e. another L4T
+# release: its libraries don't match this OS's kernel modules.
+remove_stale() {
+    cur=$(driver_image)
+    [ -n "$cur" ] && [ "$cur" != "$IMAGE" ] || return 0
+    say "replacing driver container $NAME: $cur -> $IMAGE"
+    logged timeout 30 docker stop "$NAME"
+    logged timeout 30 docker rm -f "$NAME"
+    logged timeout 60 docker rmi "$cur"
+    return 0
+}
+
+# Run a long docker command (pull or load) and show its progress. With a
+# client terminal, docker draws its usual progress bars on it (line by line if
+# the terminal is in raw mode). Otherwise relay docker's output line by line,
+# without stdio filters that would hold it back, and since docker only reports
+# per-layer events without a terminal, also tell how long it's been.
+#   $1: what is going on, for those messages; then the docker command
+shown() {
+    what=$1
+    shift
+    if [ -n "$TTYS" ]; then
+        t=${TTYS%% *}
+        if tty_cooked "$t"; then
+            timeout 600 "$@" > "$t" 2>&1
+        else
+            timeout 600 "$@" 2>&1 | while IFS= read -r line; do
+                printf '%s\r\n' "$line" > "$t"
+            done
+        fi
+        log "$* (progress shown on $TTYS)"
+        return
+    fi
+    parent=$$
+    # (fd 9 is the runtime's setup lock and stdout is read by the runtime
+    # until it closes: the ticker's sleep mustn't hold either)
+    (
+        n=0
+        while sleep 10 && kill -0 "$parent" 2>/dev/null; do
+            n=$((n + 10))
+            say "still $what (${n}s)"
+        done
+    ) 9>&- > /dev/null &
+    ticker=$!
+    timeout 600 "$@" 2>&1 | while IFS= read -r line; do
+        echo "$TAG: $line" >&2
+        echo "$line"
+    done | logger -t "$TAG"
+    kill "$ticker" 2>/dev/null
+}
+
+have_image() {
+    docker image inspect "$IMAGE" > /dev/null 2>&1
+}
+
+# Why start failed: on stdout, for nvidia-torizon-runtime to report to docker.
+error() {
+    say "$*"
+    echo "$*"
+    return 1
+}
+
+start() {
+    if [ -z "$IMAGE" ]; then
+        error "no driver container image configured (NVIDIA_L4T_DRIVER_REPO was empty at build time)"
+        return
+    fi
+    TTYS=$(client_ttys)
+    remove_stale
+    if logged timeout 10 docker start "$NAME"; then
+        say "started driver container $NAME"
+        return 0
+    fi
+    if ! have_image; then
+        # first the image shipped with the OS, then the registry
+        if [ -f "$BUNDLE" ]; then
+            say "NVIDIA container runtime not found on the host, loading the driver container shipped with the OS"
+            shown "loading the driver container" docker load -i "$BUNDLE"
+            have_image || say "$BUNDLE does not contain $IMAGE, downloading it instead"
+        fi
+        if ! have_image; then
+            [ -f "$BUNDLE" ] || say "NVIDIA container runtime not found on the host, downloading the driver container"
+            shown "downloading and unpacking the driver container" docker pull "$IMAGE"
+        fi
+        if ! have_image; then
+            if [ -f "$BUNDLE" ]; then
+                error "$BUNDLE does not contain the driver container $IMAGE, and it could not be downloaded ($SEE)"
+            else
+                error "could not download the driver container $IMAGE: check the network, and that the image exists for this L4T release ($SEE)"
+            fi
+            return
+        fi
+    fi
+    say "starting driver container $NAME"
+    # The driver gets the host's /run, where it creates /run/nvidia-l4t and
+    # the CDI spec in /run/cdi, and removes them again when it stops.
+    if ! logged timeout 60 docker run -d --name "$NAME" --restart always --privileged \
+        -v /run:/host/run:rshared "$IMAGE"; then
+        error "could not start the driver container from $IMAGE ($SEE)"
+        return
+    fi
+}
+
+reconcile() {
+    [ -n "$IMAGE" ] || return 0
+    remove_stale
+    # GPU containers that should be running but failed to start, i.e. that
+    # dockerd tried to restore before the driver container was ready
+    failed=$(docker ps -aq --filter status=exited --filter status=created | while read -r c; do
+        docker inspect -f '{{.Id}} {{.HostConfig.Runtime}} {{.HostConfig.RestartPolicy.Name}} {{.State.Error}}' "$c"
+    done | awk '$2 == "nvidia" && ($3 == "always" || $3 == "unless-stopped") && NF > 3 {print $1}')
+    for c in $failed; do
+        log "restarting GPU container $c, which failed to start at boot"
+        logged timeout 600 docker start "$c" || log "failed to restart $c"
+    done
+}
+
+case "$1" in
+    start) start ;;
+    reconcile) reconcile ;;
+    *) echo "usage: $0 start|reconcile" >&2; exit 2 ;;
+esac

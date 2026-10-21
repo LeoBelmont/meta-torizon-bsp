@@ -143,7 +143,26 @@ jetson-orin-nano-devkit-nvme login:
 Run NVIDIA docker
 ======
 
-The NVIDIA container runtime is included in all Jetson configurations for Torizon.
+The OS image does not include the NVIDIA container toolkit or the L4T userspace libraries. Docker's `nvidia` runtime is `nvidia-torizon-runtime`: the first time a container is created with `--runtime nvidia`, it pulls and starts the `nvidia-l4t-driver` container, which provides the L4T libraries and the NVIDIA container toolkit for this OS's L4T release. When that `docker run` is started from a terminal, it shows Docker's usual download progress there; otherwise the progress appears in the container's output once it starts. Everything the runtime does is logged to the journal: `journalctl -t nvidia-torizon-runtime`. If the driver container can't be downloaded or started, `docker run` fails with the reason ("OCI runtime create failed: nvidia-torizon-runtime: ...").
+
+While `nvidia-l4t-driver` runs, it exposes its files under `/run/nvidia-l4t/driver` and publishes a CDI spec as `/run/cdi/nvidia-l4t.json`; when it stops, it removes everything it created on the host (spec, mount, lock file and directories), and the runtime keeps no files of its own. Stopping it does not affect GPU containers that are already running, and the next GPU container starts it again. It runs with `--restart always`, so it is also restored after a reboot.
+
+`--gpus` does not go through the `nvidia` runtime: it only works while `nvidia-l4t-driver` is running. Use `--runtime nvidia` (or `runtime: nvidia` in Compose files) instead.
+
+Driver container image
+------
+
+The `nvidia-l4t-driver` image is built outside of this layer (torizon-containers), one image per L4T release. The OS looks it up as `<NVIDIA_L4T_DRIVER_REPO>:<L4T_VERSION>`: the tag is meta-tegra's `L4T_VERSION` of the OS build, so it follows meta-tegra updates without changes here, and an image with that tag must exist in the registry. The repository defaults to `lbornia/nvidia-l4t-driver` (Docker Hub); to use another one, set it in `local.conf`:
+
+```
+NVIDIA_L4T_DRIVER_REPO = "<registry>/<namespace>/nvidia-l4t-driver"
+```
+
+`NVIDIA_L4T_DRIVER_TAG` (default `${L4T_VERSION}`) or the whole `NVIDIA_L4T_DRIVER_IMAGE` can be overridden as well.
+
+For devices without internet access, the driver container image can be shipped in the OS: set `NVIDIA_L4T_DRIVER_BUNDLE_URI` (and `NVIDIA_L4T_DRIVER_BUNDLE_SHA256`, unless it is a `file://` URI) to a `docker save` archive of the image, e.g. made with `docker save lbornia/nvidia-l4t-driver:39.2.1 -o nvidia-l4t-driver-39.2.1.tar`. It is installed as `/usr/share/nvidia-l4t-driver/nvidia-l4t-driver-<L4T_VERSION>.tar` (about 330 MB), and the runtime loads it instead of downloading the image; the name carries the tag, so an archive of another L4T release is never loaded. Without it, or if it doesn't contain the expected image, the runtime downloads the image. Since it is part of the OS, every OS update, online or offline (Lockbox), brings the driver container matching its L4T release along.
+
+After an OS update to another L4T release, the driver container of the previous release can no longer start. `nvidia-l4t-driver-reconcile.service` runs once Docker is up: it replaces that container (the next GPU container pulls the new image) and restarts the GPU containers that failed to start while Docker was restoring them. `nvidia-l4t-driver-ctl start` starts the driver container by hand, e.g. to pull it before going offline.
 
 Use `docker run --runtime nvidia` to run containerized NVIDIA applications. For example, to run the `stable-diffusion` tutorial from the NVIDIA Jetson AI Lab (https://www.jetson-ai-lab.com/archive/tutorial_stable-diffusion.html) use the following command in Torizon:
 

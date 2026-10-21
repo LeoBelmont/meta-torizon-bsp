@@ -11,7 +11,10 @@ BBMASK += "meta-tegra/external/sota/recipes-bsp/uefi/edk2-firmware-tegra_%.bbapp
 
 do_image_tegraflash_tar[depends] += " tegra-minimal-initramfs:do_image_complete"
 
-IMAGE_INSTALL:append:tegra = " nvidia-container-toolkit"
+# The NVIDIA container toolkit and the L4T userspace it exposes to containers
+# live in the nvidia-l4t-driver container, pulled on the first GPU container;
+# the OS only ships the runtime that does it.
+IMAGE_INSTALL:append:tegra = " nvidia-torizon-runtime"
 
 MACHINE_EXTRA_RDEPENDS:remove = " tegra-redundant-boot"
 

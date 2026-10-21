@@ -1,0 +1,124 @@
+#!/bin/sh
+# Host-side OCI runtime registered in daemon.json as "nvidia". It is the only
+# NVIDIA container piece shipped in the OS: the L4T userspace libraries and the
+# NVIDIA container toolkit live in the nvidia-l4t-driver container instead,
+# which is pulled and started the first time a GPU container is created.
+#
+# Every command except "create" goes straight to runc, so containers can still
+# be stopped and removed while the driver container is down. On "create" it
+# makes sure the driver container is running (nvidia-l4t-driver-ctl start,
+# which also reports the progress to the user) and delegates to the
+# nvidia-container-runtime the driver exposes under /run/nvidia-l4t/driver.
+
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NAME=nvidia-l4t-driver
+SPEC=/run/cdi/nvidia-l4t.json
+EXPORT=/run/nvidia-l4t/driver
+ALIVE=/run/nvidia-l4t/alive
+RT=$EXPORT/usr/bin/nvidia-container-runtime
+# Nothing of ours stays on the host once the driver container stops: we log
+# to the journal (journalctl -t nvidia-torizon-runtime) instead of a file, and
+# lock this script itself instead of a lock file.
+TAG=nvidia-torizon-runtime
+SEE="see journalctl -t $TAG"
+
+log() { logger -t "$TAG" -- "$*"; }
+say() { echo "$TAG: $*" >&2; log "$*"; }
+
+# find the runc subcommand (skip global flags and their values) and the
+# runtime's error log
+cmd=
+skip=
+runtime_log=
+for a in "$@"; do
+    if [ -n "$skip" ]; then
+        [ "$skip" = --log ] && runtime_log=$a
+        skip=
+        continue
+    fi
+    case "$a" in
+        --log=*) runtime_log=${a#--log=} ;;
+        --root | --log | --log-format | --criu | --rootless) skip=$a ;;
+        -*) ;;
+        *) cmd=$a; break ;;
+    esac
+done
+
+# Fail the create. dockerd reports the last error line of the runtime's log
+# as the reason ("OCI runtime create failed: <msg>"): without it, users only
+# see "unable to retrieve OCI runtime error", and what we wrote to stderr is
+# never shown since the container's output isn't relayed for a failed create.
+fail() {
+    say "$*"
+    if [ -n "$runtime_log" ]; then
+        msg=$(printf '%s: %s' "$TAG" "$*" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ')
+        printf '{"level":"error","msg":"%s","time":"%s"}\n' "$msg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$runtime_log"
+    fi
+    exit 1
+}
+
+[ "$cmd" = create ] || exec runc "$@"
+
+# ready = spec published AND the driver still holds its liveness lock (the
+# kernel drops it when the driver dies, even on SIGKILL)
+driver_ready() {
+    [ -f "$SPEC" ] && [ -e "$ALIVE" ] && ! flock -n "$ALIVE" true
+}
+
+log "create: $*"
+if ! driver_ready; then
+    # serializes concurrent creates; flock works on a read-only file
+    exec 9< "$0"
+    if ! flock -n 9; then
+        say "waiting for another container that is setting up the driver container"
+        flock 9
+    fi
+    if ! driver_ready; then
+        if [ -f "$SPEC" ] || grep -q " $EXPORT " /proc/mounts; then
+            log "driver died without cleaning up, removing stale state"
+            rm -f "$SPEC"
+            umount -l "$EXPORT" 2>/dev/null
+        fi
+        # While dockerd is starting it restores containers before serving its
+        # API, so calling docker here would deadlock. The driver has
+        # --restart always and is being restored in parallel: just wait for
+        # it. If it can't come up (e.g. it is from the L4T release before an
+        # OS update), nvidia-l4t-driver-reconcile.service replaces it and
+        # restarts this container once dockerd is up.
+        if systemctl is-active -q docker; then
+            api=1
+            # prints why it failed on stdout
+            if ! reason=$(nvidia-l4t-driver-ctl start); then
+                fail "${reason:-could not start the driver container $NAME ($SEE)}"
+            fi
+            wait=60
+        else
+            api=
+            say "dockerd is starting, waiting for $NAME to be restored"
+            wait=20
+        fi
+        i=0
+        while ! driver_ready && [ $i -lt $wait ]; do
+            sleep 1
+            i=$((i + 1))
+            # the driver exited (e.g. it refused a kernel driver version it
+            # doesn't match): no point waiting for it
+            if [ -n "$api" ] && [ "$(timeout 5 docker inspect -f '{{.State.Running}} {{.State.Restarting}}' "$NAME" 2> /dev/null)" != "true false" ]; then
+                break
+            fi
+        done
+    fi
+    exec 9>&-
+fi
+
+if ! driver_ready || [ ! -f "$RT" ]; then
+    # the driver's last words, e.g. a version mismatch with the kernel
+    reason=
+    [ -n "$api" ] && reason=$(timeout 5 docker logs --tail 1 "$NAME" 2>&1 | sed 's/^nvidia-l4t-driver: //')
+    fail "driver container $NAME did not become ready${reason:+: $reason} ($SEE)"
+fi
+log "delegating to driver runtime"
+# Where the driver container keeps the toolkit config for this runtime (its
+# original name, kept so published driver images keep working).
+export XDG_CONFIG_HOME=$EXPORT/usr/share/nvidia-lazy
+exec "$RT" "$@"

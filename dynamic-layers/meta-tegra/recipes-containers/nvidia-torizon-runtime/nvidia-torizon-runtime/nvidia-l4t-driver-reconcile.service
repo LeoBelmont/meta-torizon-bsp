@@ -1,0 +1,11 @@
+[Unit]
+Description=Replace an outdated NVIDIA L4T driver container and restart GPU containers that failed at boot
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nvidia-l4t-driver-ctl reconcile
+
+[Install]
+WantedBy=multi-user.target
