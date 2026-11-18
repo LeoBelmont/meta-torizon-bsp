@@ -22,5 +22,11 @@ EOF
 	install -m 0644 uEnv.txt ${D}${libdir}/ostree-boot/
 }
 
+# The kernel is a signed UKI (torizon-signed): tell L4TLauncher, so that it
+# boots it the same way before the UEFI Secure Boot keys are enrolled too.
+do_install:append:ostree-uki () {
+	echo "uki=1" >> ${D}${libdir}/ostree-boot/uEnv.txt
+}
+
 PACKAGES = "ostree-uenv-extlinux-conf"
 FILES:ostree-uenv-extlinux-conf = "${libdir}/ostree-boot/uEnv.txt"

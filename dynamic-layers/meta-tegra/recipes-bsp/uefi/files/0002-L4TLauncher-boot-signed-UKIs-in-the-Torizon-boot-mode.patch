@@ -1,0 +1,281 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Date: Wed, 18 Nov 2026 17:07:58 -0300
+Subject: [PATCH] L4TLauncher: boot signed UKIs in the Torizon boot mode
+
+With UEFI Secure Boot enabled, the Torizon boot mode could not boot: it
+read uEnv.txt through OpenAndReadFileToBuffer(), which then requires a
+detached uEnv.txt.sig, and OSTree writes uEnv.txt on the device at every
+deployment, so it cannot have one. Nor could the initrd, devicetree and
+bootargs it names be trusted.
+
+Boot a Unified Kernel Image (UKI) instead: kernel_image(2) points to a
+signed UKI that carries the kernel, the initramfs and the kernel command
+line, and LoadImage() verifies it against db. This is the case when
+uEnv.txt has "uki=1", and always with Secure Boot enabled, so that
+nothing from uEnv.txt but the choice of the UKI reaches the boot:
+
+- uEnv.txt is read as an untrusted file in the Torizon boot mode.
+- ramdisk_image, fdtdir and fdtfile are ignored: the devicetree is the
+  one of the boot chain.
+- No LoadOptions are passed, so the UKI's command line is used even
+  with Secure Boot disabled.
+- The bootargs of the selected slot are published in the volatile
+  TorizonBootArgs variable, for the initramfs to find the OSTree
+  deployment ("ostree=") that the fixed command line cannot carry. The
+  composefs signature check in the initramfs then makes sure that the
+  deployment is a signed one.
+- A failed boot does not fall back to the kernel partition: the image
+  there boots the root filesystem without verifying it. While an update
+  is being tried, the system is reset instead, so that the boot counter
+  runs out and the previous deployment is booted.
+
+Upstream-Status: Inappropriate [Torizon specific]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+ .../Application/L4TLauncher/L4TLauncher.c     | 152 +++++++++++++++++-
+ .../Application/L4TLauncher/L4TLauncher.h     |  16 ++
+ 2 files changed, 161 insertions(+), 7 deletions(-)
+
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+index 2180535..b204617 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+@@ -1260,6 +1260,47 @@ CheckCommandString (
+   return EFI_NOT_FOUND;
+ }
+ 
++STATIC EFI_GUID  mTorizonBootVariableGuid = TORIZON_BOOT_VARIABLE_GUID;
++
++// Set when the Torizon boot mode boots a UKI
++STATIC BOOLEAN  mTorizonUkiBoot = FALSE;
++
++/**
++  Export the bootargs of the selected uEnv.txt slot for the initramfs
++
++  The kernel command line of a signed UKI is fixed at build time, so the
++  OSTree deployment to boot ("ostree=" argument, written by OSTree into the
++  bootargs of uEnv.txt) cannot be passed on it. Publish the bootargs in a
++  volatile variable instead: the initramfs takes "ostree=" from it, and the
++  composefs signature check then makes sure the deployment is a signed one.
++
++  @param[in]  BootArgs  Bootargs of the selected slot, may be NULL
++
++**/
++STATIC
++VOID
++TorizonExportBootArgs (
++  IN CONST CHAR16  *BootArgs
++  )
++{
++  EFI_STATUS  Status;
++
++  if (BootArgs == NULL) {
++    BootArgs = L"";
++  }
++
++  Status = gRT->SetVariable (
++                  TORIZON_BOOTARGS_VARIABLE_NAME,
++                  &mTorizonBootVariableGuid,
++                  EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++                  StrSize (BootArgs),
++                  (VOID *)BootArgs
++                  );
++  if (EFI_ERROR (Status)) {
++    ErrorPrint (L"%a: Failed to set %s: %r\r\n", __FUNCTION__, TORIZON_BOOTARGS_VARIABLE_NAME, Status);
++  }
++}
++
+ /**
+   Process the extlinux.conf file
+ 
+@@ -1294,8 +1335,10 @@ ProcessExtLinuxConfig (
+   CHAR16           *UEnvFDTDir = NULL;
+   CHAR16           *UEnvFDTFile = NULL;
+   CHAR16           *UEnvBootArgs = NULL;
++  CHAR16           *UEnvUki = NULL;
+   CHAR16           *ConfPath = NULL;
+   BOOLEAN          Ascii;
++  BOOLEAN          TorizonUki;
+   UINTN            Index;
+ 
+   ZeroMem (BootConfig, sizeof (EXTLINUX_BOOT_CONFIG));
+@@ -1316,13 +1359,28 @@ ProcessExtLinuxConfig (
+     ConfPath = EXTLINUX_CONF_PATH;
+   }
+ 
+-  Status = OpenAndReadFileToBuffer (
+-             *RootFsHandle,
+-             ConfPath,
+-             &FileHandle,
+-             NULL,
+-             NULL
+-             );
++  if (BootParams->BootMode == NVIDIA_L4T_BOOTMODE_TORIZON) {
++    //
++    // OSTree writes uEnv.txt on the device at every deployment, so it cannot
++    // have a detached signature. Read it as untrusted: with Secure Boot it
++    // only selects the UKI to boot, which LoadImage() verifies against db.
++    //
++    Status = OpenAndReadUntrustedFileToBuffer (
++               *RootFsHandle,
++               ConfPath,
++               &FileHandle,
++               NULL,
++               NULL
++               );
++  } else {
++    Status = OpenAndReadFileToBuffer (
++               *RootFsHandle,
++               ConfPath,
++               &FileHandle,
++               NULL,
++               NULL
++               );
++  }
+ 
+   if (EFI_ERROR (Status)) {
+     ErrorPrint (L"%a:sds Failed to Authenticate %s (%r)\r\n", __FUNCTION__, ConfPath, Status);
+@@ -1395,6 +1453,13 @@ ProcessExtLinuxConfig (
+           }
+         }
+ 
++        if (UEnvUki == NULL) {
++          Status = CheckCommandString (CleanLine, UENV_KEY_UKI, &UEnvUki);
++          if (!EFI_ERROR (Status)) {
++            continue;
++          }
++        }
++
+         /* ignore ExtLinux config for Torizon boot */
+         continue;
+       }
+@@ -1471,7 +1536,56 @@ ProcessExtLinuxConfig (
+     }
+   }
+ 
++  //
++  // UKI boot: with Secure Boot always, so that nothing from the unsigned
++  // uEnv.txt but the choice of the (signed) UKI reaches the boot.
++  //
++  TorizonUki = FALSE;
+   if (BootParams->BootMode == NVIDIA_L4T_BOOTMODE_TORIZON) {
++    TorizonUki = IsSecureBootEnabled () ||
++                 ((UEnvUki != NULL) && (StrCmp (UEnvUki, L"1") == 0));
++  }
++
++  if (UEnvUki != NULL) {
++    FreePool (UEnvUki);
++    UEnvUki = NULL;
++  }
++
++  if (TorizonUki) {
++    mTorizonUkiBoot = TRUE;
++    ErrorPrint (L"%a: Torizon UKI boot (Secure Boot %a)\r\n", __FUNCTION__, IsSecureBootEnabled () ? "enabled" : "disabled");
++
++    //
++    // The UKI carries the initramfs and the kernel command line, and the
++    // devicetree comes from the (signed) boot chain: ignore the uEnv.txt
++    // ones, and pass no LoadOptions so that the UKI's command line is used
++    // even when Secure Boot is disabled.
++    //
++    TorizonExportBootArgs (UEnvBootArgs);
++
++    BootConfig->NumberOfBootOptions      = 1;
++    BootConfig->BootOptions[0].LinuxPath = UEnvKernelImage;
++
++    if (UEnvRamDiskImage != NULL) {
++      FreePool (UEnvRamDiskImage);
++      UEnvRamDiskImage = NULL;
++    }
++
++    if (UEnvBootArgs != NULL) {
++      FreePool (UEnvBootArgs);
++      UEnvBootArgs = NULL;
++    }
++
++    if (UEnvFDTDir != NULL) {
++      FreePool (UEnvFDTDir);
++      UEnvFDTDir = NULL;
++    }
++
++    if (UEnvFDTFile != NULL) {
++      FreePool (UEnvFDTFile);
++      UEnvFDTFile = NULL;
++    }
++  } else if (BootParams->BootMode == NVIDIA_L4T_BOOTMODE_TORIZON) {
+     BootConfig->NumberOfBootOptions = 1;
+     BootConfig->BootOptions[0].LinuxPath = UEnvKernelImage;
+     BootConfig->BootOptions[0].InitrdPath = UEnvRamDiskImage;
+@@ -2855,6 +2969,7 @@ L4TLauncher (
+   EXTLINUX_BOOT_CONFIG       ExtLinuxConfig;
+   UINTN                      ExtLinuxBootOption;
+   UINTN                      Index;
++  BOOLEAN                    TorizonBoot;
+ 
+   Status = gBS->HandleProtocol (ImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&LoadedImage);
+   if (EFI_ERROR (Status)) {
+@@ -2951,6 +3066,7 @@ L4TLauncher (
+     }
+ 
+     if (BootParams.BootMode == NVIDIA_L4T_BOOTMODE_DIRECT || BootParams.BootMode == NVIDIA_L4T_BOOTMODE_TORIZON) {
++      TorizonBoot = (BOOLEAN)(BootParams.BootMode == NVIDIA_L4T_BOOTMODE_TORIZON);
+       if (BootParams.BootMode == NVIDIA_L4T_BOOTMODE_DIRECT) {
+         ErrorPrint (L"%a: Attempting Direct Boot\r\n", __FUNCTION__);
+       } else {
+@@ -3010,6 +3126,28 @@ L4TLauncher (
+         FreePool (ExtLinuxConfig.MenuTitle);
+         ExtLinuxConfig.MenuTitle = NULL;
+       }
++
++      //
++      // A failed Torizon boot must not fall back to the kernel partition when
++      // booting UKIs or with Secure Boot enabled: that image boots the root
++      // filesystem without verifying it.
++      //
++      if (TorizonBoot &&
++          (BootParams.BootMode == NVIDIA_L4T_BOOTMODE_BOOTIMG) &&
++          (mTorizonUkiBoot || IsSecureBootEnabled ()))
++      {
++        ErrorPrint (L"%a: Torizon boot failed, not falling back to the kernel partition\r\n", __FUNCTION__);
++        BootParams.BootMode = NVIDIA_L4T_BOOTMODE_TORIZON;
++
++        //
++        // While an update is being tried, reset so that the boot counter
++        // runs out and the previous deployment gets booted (rollback).
++        //
++        if ((BootParams.TorizonBootFlags & TORIZON_BOOTFLAGS_UPGRADE_AVAILABLE) != 0) {
++          ErrorPrint (L"%a: update pending, resetting to retry\r\n", __FUNCTION__);
++          gRT->ResetSystem (EfiResetCold, EFI_SUCCESS, 0, NULL);
++        }
++      }
+     }
+ 
+     // Not in else to allow fallback
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.h b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.h
+index 1dc5c1d..ca0a8cf 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.h
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.h
+@@ -65,6 +65,22 @@
+ #define UENV_KEY_FDTFILE2         L"fdtfile2="
+ #define UENV_KEY_BOOTARGS2        L"bootargs2="
+ 
++//
++// Torizon UKI boot: kernel_image(2) is a signed Unified Kernel Image that
++// carries the kernel, the initramfs and the kernel command line. It is set
++// by "uki=1" in uEnv.txt, and always used when UEFI Secure Boot is enabled.
++//
++#define UENV_KEY_UKI  L"uki="
++
++//
++// Volatile variable with the bootargs of the selected uEnv.txt slot, for the
++// initramfs to find the OSTree deployment ("ostree=" argument): the command
++// line of a signed UKI is fixed at build time and cannot carry it.
++//
++#define TORIZON_BOOTARGS_VARIABLE_NAME  L"TorizonBootArgs"
++#define TORIZON_BOOT_VARIABLE_GUID \
++  { 0x42dcf640, 0x982c, 0x443e, { 0xa0, 0xaf, 0xf6, 0xeb, 0x12, 0xf8, 0x81, 0xf5 } }
++
+ #define MAX_EXTLINUX_OPTIONS  10
+ 
+ #define SIG_FILE_SIZE_2KB  SIZE_2KB
