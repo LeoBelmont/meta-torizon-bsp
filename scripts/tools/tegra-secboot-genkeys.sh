@@ -1,0 +1,89 @@
+#!/bin/sh
+# Copyright (c) 2026 Toradex AG
+# SPDX-License-Identifier: MIT
+#
+# Create the keys for UEFI Secure Boot on NVIDIA Jetson (torizon-signed), in
+# the layout tegra-torizon-signed.bbclass expects in TEGRA_SECBOOT_KEYDIR:
+#
+#   uefi/PK.{key,crt} uefi/KEK.{key,crt} uefi/db.{key,crt}
+#                            UEFI Secure Boot keys; db signs L4TLauncher and
+#                            the UKI, PK and KEK are enrolled with it
+#   modsign/modsign_key.pem  kernel module signing key and certificate
+#   bootchain/pkc.pem        with --bootchain: Tegra boot chain signing key
+#   bootchain/sbk.key        with --bootchain: Tegra boot chain encryption key
+#
+# The boot chain keys only take effect once fused in the SoC, which is
+# irreversible: see docs/README-nvidia-secure-boot.md before fusing.
+#
+# Keep production keys off the build machine where possible, and never commit
+# them to a repository.
+
+set -eu
+
+usage() {
+	echo "usage: $0 [--bootchain] [--cn PREFIX] KEYDIR" >&2
+	exit 1
+}
+
+bootchain=0
+cn="Torizon"
+while [ $# -gt 1 ]; do
+	case "$1" in
+	--bootchain) bootchain=1 ;;
+	--cn) shift; cn="$1" ;;
+	*) usage ;;
+	esac
+	shift
+done
+[ $# -eq 1 ] || usage
+keydir="$1"
+
+if [ -e "${keydir}" ] && [ -n "$(ls -A "${keydir}" 2>/dev/null)" ]; then
+	echo "${keydir} is not empty, refusing to overwrite keys" >&2
+	exit 1
+fi
+
+umask 077
+mkdir -p "${keydir}/uefi" "${keydir}/modsign"
+
+for name in PK KEK db; do
+	openssl req -new -x509 -newkey rsa:2048 -sha256 -days 7300 -nodes \
+		-subj "/CN=${cn} UEFI ${name}/" \
+		-keyout "${keydir}/uefi/${name}.key" -out "${keydir}/uefi/${name}.crt" 2>/dev/null
+done
+
+# Extensions as in the kernel's certs/default_x509.genkey
+cat > "${keydir}/modsign/x509.genkey" <<EOF
+[ req ]
+default_bits = 4096
+distinguished_name = req_distinguished_name
+prompt = no
+string_mask = utf8only
+x509_extensions = myexts
+
+[ req_distinguished_name ]
+CN = ${cn} kernel module signing key
+
+[ myexts ]
+basicConstraints=critical,CA:FALSE
+keyUsage=digitalSignature
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid
+EOF
+openssl req -new -x509 -nodes -utf8 -sha256 -days 7300 -batch \
+	-config "${keydir}/modsign/x509.genkey" -outform PEM \
+	-keyout "${keydir}/modsign/modsign_key.pem" -out "${keydir}/modsign/modsign_key.crt" 2>/dev/null
+cat "${keydir}/modsign/modsign_key.crt" >> "${keydir}/modsign/modsign_key.pem"
+
+if [ "${bootchain}" = "1" ]; then
+	mkdir -p "${keydir}/bootchain"
+	# Orin (T234) accepts RSA-3072 PKC keys
+	openssl genrsa -out "${keydir}/bootchain/pkc.pem" 3072 2>/dev/null
+	# SBK: 256 bits, as eight 32-bit words in hexadecimal
+	printf '%s\n' "$(od -An -tx4 -N32 /dev/urandom | tr -s ' \n' ' ' | \
+		sed -e 's/^ //' -e 's/ $//' -e 's/\([0-9a-f]\{8\}\)/0x\1/g')" > "${keydir}/bootchain/sbk.key"
+fi
+
+echo "Keys created in ${keydir}. Set in local.conf:"
+echo "  INHERIT += \"torizon-signed\""
+echo "  TEGRA_SECBOOT_KEYDIR = \"$(cd "${keydir}" && pwd)\""

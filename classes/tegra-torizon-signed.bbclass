@@ -1,0 +1,92 @@
+# UEFI Secure Boot for NVIDIA Jetson machines
+#
+# Inherited by torizon-signed (meta-torizon) on Jetson machines, so it is
+# enabled like on the Toradex SoMs, with INHERIT += "torizon-signed".
+#
+# Chain of trust:
+#
+#   Tegra boot chain       signed with the PKC key (and encrypted with the SBK
+#                          key) fused in the SoC (TEGRA_SECBOOT_BOOTCHAIN)
+#   UEFI firmware          enrolls the PK, KEK and db keys at the first boot
+#   L4TLauncher            signed with db; its Torizon boot mode boots the UKI
+#                          of the deployment chosen in uEnv.txt, with no
+#                          fallback to the kernel partition
+#   UKI                    kernel, initramfs and command line, signed with db
+#   OSTree deployment      verified by composefs (cfs-signed, which
+#                          torizon-signed inherits) against the commit
+#                          signature
+#   kernel modules         signed, and unsigned ones rejected
+#
+# See docs/README-nvidia-secure-boot.md.
+
+DISTROOVERRIDES .= ":ostree-uki:tegra-signed"
+
+# Key directory, see scripts/tools/tegra-secboot-genkeys.sh for the layout
+TEGRA_SECBOOT_KEYDIR ?= "${TOPDIR}/keys/tegra"
+
+# UEFI Secure Boot keys: PK.crt, KEK.crt and db.crt with db.key. With
+# TEGRA_UEFI_DB_KEY and TEGRA_UEFI_DB_CERT set, meta-tegra signs L4TLauncher
+# and the kernel, and flashes UefiDefaultSecurityKeys.dtbo, from which the
+# UEFI firmware enrolls the keys (see tegra-uefi-keys-dtb.bbappend).
+TEGRA_UEFI_KEYDIR ?= "${TEGRA_SECBOOT_KEYDIR}/uefi"
+TEGRA_UEFI_DB_KEY = "${TEGRA_UEFI_KEYDIR}/db.key"
+TEGRA_UEFI_DB_CERT = "${TEGRA_UEFI_KEYDIR}/db.crt"
+
+# Unified Kernel Image with the kernel, the initramfs and the command line,
+# signed with db. meta-updater puts it in the OSTree commit as the kernel
+# (vmlinuz). The devicetree is the one of the boot chain, as L4TLauncher
+# ignores the uEnv.txt one for a UKI: do not deploy any.
+IMAGE_CLASSES:append = " uki"
+# Only the Torizon OS images get a UKI, not the other images of the build
+IMAGE_CLASSES:remove:pn-tegra-minimal-initramfs = "uki"
+IMAGE_CLASSES:remove:pn-tegra-initrd-flash-initramfs = "uki"
+IMAGE_CLASSES:remove:pn-tegra-espimage = "uki"
+# ukify signs with sbsign: a task depending on a do_populate_sysroot gets it
+# in its recipe sysroot (staging.bbclass), as the meta-tegra signing tasks do
+do_uki[depends] += "sbsigntool-native:do_populate_sysroot"
+# One UKI per image: do_uki writes it straight to DEPLOY_DIR_IMAGE
+UKI_FILENAME = "${IMAGE_BASENAME}-${MACHINE}.efi"
+UKI_CMDLINE = "${OSTREE_KERNEL_ARGS}"
+UKI_DEVICETREE = ""
+UKI_SB_KEY = "${TEGRA_UEFI_DB_KEY}"
+UKI_SB_CERT = "${TEGRA_UEFI_DB_CERT}"
+# As an override: torizon.bbclass is inherited after this class and sets it
+OSTREE_DEPLOY_DEVICETREE:tegra-signed = "0"
+
+# Key for signing the kernel modules: a PEM file with the private key and
+# the certificate. The kernel embeds the certificate and, with
+# CONFIG_MODULE_SIG_FORCE, rejects unsigned modules, out-of-tree ones too.
+TEGRA_MODSIGN_KEY ?= "${TEGRA_SECBOOT_KEYDIR}/modsign/modsign_key.pem"
+
+# Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
+# NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
+TEGRA_SECBOOT_LOCKDOWN ?= "1"
+
+# Tegra boot chain signing, for devices with the PKC (and optionally SBK)
+# keys fused. Off by default: a device without fused keys boots unsigned
+# boot chain images, and fusing is irreversible (see the README).
+TEGRA_SECBOOT_BOOTCHAIN ?= "0"
+TEGRA_SECBOOT_BOOTCHAIN_SBK ?= "0"
+TEGRA_SIGNING_PKC = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/pkc.pem' if d.getVar('TEGRA_SECBOOT_BOOTCHAIN') == '1' else ''}"
+TEGRA_SIGNING_SBK = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/sbk.key' if d.getVar('TEGRA_SECBOOT_BOOTCHAIN') == '1' and d.getVar('TEGRA_SECBOOT_BOOTCHAIN_SBK') == '1' else ''}"
+
+python tegra_torizon_signed_check_keys() {
+    import os
+
+    keys = [
+        d.getVar('TEGRA_UEFI_DB_KEY'),
+        d.getVar('TEGRA_UEFI_DB_CERT'),
+        os.path.join(d.getVar('TEGRA_UEFI_KEYDIR'), 'PK.crt'),
+        os.path.join(d.getVar('TEGRA_UEFI_KEYDIR'), 'KEK.crt'),
+        d.getVar('TEGRA_MODSIGN_KEY'),
+    ]
+    missing = [k for k in keys if not os.path.exists(k)]
+    if missing:
+        bb.fatal("torizon-signed: missing Jetson Secure Boot keys: %s. Create them "
+                 "with meta-torizon-bsp/scripts/tools/tegra-secboot-genkeys.sh, or set "
+                 "TEGRA_SECBOOT_KEYDIR (see docs/README-nvidia-secure-boot.md)."
+                 % ' '.join(missing))
+}
+
+addhandler tegra_torizon_signed_check_keys
+tegra_torizon_signed_check_keys[eventmask] = "bb.event.SanityCheck"

@@ -167,3 +167,7 @@ sudo docker run -it --rm --network=host \
 ```
 
 Adjust the device list to match what the command above lists on your target.
+
+Secure Boot
+======
+Signed images (`INHERIT += "torizon-signed"`) use UEFI Secure Boot with a signed Unified Kernel Image and composefs on the Jetson Orin Nano. See [README-nvidia-secure-boot.md](README-nvidia-secure-boot.md).
