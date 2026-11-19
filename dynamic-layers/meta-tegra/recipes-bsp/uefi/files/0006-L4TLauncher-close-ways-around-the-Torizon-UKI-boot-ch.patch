@@ -1,0 +1,405 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Date: Thu, 19 Nov 2026 18:32:41 -0300
+Subject: [PATCH] L4TLauncher: close ways around the Torizon UKI boot checks
+
+From a review of the Torizon boot changes:
+
+- The operating system can create a variable that does not exist yet,
+  with attributes of its choice. Created with runtime access before
+  there was a minimum security version, TorizonSecurityVersionMin
+  stayed writable from the operating system, and the minimum could not
+  be raised. Create it at the first boot, also for the version 0, and
+  replace a variable that does not have exactly the expected
+  attributes. The same for the volatile TorizonBootArgs and
+  TorizonSecurityVersions: a non-volatile one of that name kept its old
+  value. A UKI boot stops when TorizonBootArgs cannot be set.
+
+- ValidateRootfsStatus() can select the recovery boot mode after the
+  boot mode was set to the Torizon one, from the state of the root
+  filesystem slots, which the operating system can write. Set the
+  Torizon boot mode again after it, with Secure Boot enabled.
+
+- With Secure Boot enabled, refuse a boot image that is not a UKI:
+  uEnv.txt could name the kernel, or another program signed with db,
+  such as an earlier L4TLauncher, in place of the UKI.
+
+- Only raise the minimum security version with Secure Boot enabled:
+  without it the image and its version are not verified.
+
+Upstream-Status: Inappropriate [Torizon specific]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+ .../Application/L4TLauncher/L4TLauncher.c     | 214 ++++++++++++++----
+ 1 file changed, 168 insertions(+), 46 deletions(-)
+
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+index d48bc93..faca935 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+@@ -1269,15 +1269,65 @@ STATIC BOOLEAN  mTorizonUkiBoot = FALSE;
+ 
+ #define TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME  L"TorizonSecurityVersionMin"
+ #define TORIZON_SECURITY_VERSIONS_VARIABLE_NAME     L"TorizonSecurityVersions"
++#define TORIZON_SECURITY_VERSION_MIN_ATTRIBUTES     (EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS)
+ 
+ // Boot flags of the boot in progress, for the security version check
+ STATIC UINT8  mTorizonBootFlags = 0;
+ 
++/**
++  Set a variable of the Torizon boot, with exactly the given attributes
++
++  The operating system can create a variable that does not exist yet, with
++  attributes of its choice. SetVariable() then fails for the attributes
++  that are wanted here, and the variable stays under the control of the
++  operating system. Delete such a variable first: a variable without
++  runtime access, or a volatile one, cannot be changed from there.
++
++  @param[in]  Name        Name of the variable
++  @param[in]  Attributes  Attributes the variable must have
++  @param[in]  DataSize    Size of the value
++  @param[in]  Data        Value
++
++  @retval EFI_SUCCESS  The variable is set
++  @retval others       The variable could not be set
++**/
++STATIC
++EFI_STATUS
++TorizonSetVariable (
++  IN CHAR16  *Name,
++  IN UINT32  Attributes,
++  IN UINTN   DataSize,
++  IN VOID    *Data
++  )
++{
++  EFI_STATUS  Status;
++  UINT32      OldAttributes;
++  UINTN       OldSize;
++
++  OldAttributes = 0;
++  OldSize       = 0;
++  Status        = gRT->GetVariable (Name, &mTorizonBootVariableGuid, &OldAttributes, &OldSize, NULL);
++  if ((Status == EFI_BUFFER_TOO_SMALL) && (OldAttributes != Attributes)) {
++    ErrorPrint (L"%a: %s has the attributes 0x%x instead of 0x%x, deleting it\r\n", __FUNCTION__, Name, OldAttributes, Attributes);
++    Status = gRT->SetVariable (Name, &mTorizonBootVariableGuid, 0, 0, NULL);
++    if (EFI_ERROR (Status)) {
++      return Status;
++    }
++  }
++
++  return gRT->SetVariable (Name, &mTorizonBootVariableGuid, Attributes, DataSize, Data);
++}
++
+ // Section of a UKI with its security version, a decimal number as text
+ STATIC CONST UINT8  mTorizonSecurityVersionSection[EFI_IMAGE_SIZEOF_SHORT_NAME] = {
+   '.', 't', 'z', 'n', 's', 'v', 0, 0
+ };
+ 
++// Section of a UKI with the kernel: what tells a UKI from another image
++STATIC CONST UINT8  mTorizonUkiLinuxSection[EFI_IMAGE_SIZEOF_SHORT_NAME] = {
++  '.', 'l', 'i', 'n', 'u', 'x', 0, 0
++};
++
+ /**
+   Get the security version of a loaded UKI
+ 
+@@ -1287,14 +1337,17 @@ STATIC CONST UINT8  mTorizonSecurityVersionSection[EFI_IMAGE_SIZEOF_SHORT_NAME]
+ 
+   @param[in]  ImageBase  Address the image is loaded at
+   @param[in]  ImageSize  Size of the loaded image
++  @param[out] IsUki      TRUE when the image has the section of a UKI
++                         that holds the kernel
+ 
+   @return The security version, 0 when the image has none
+ **/
+ STATIC
+ UINT32
+ TorizonImageSecurityVersion (
+-  IN CONST UINT8  *ImageBase,
+-  IN UINT64       ImageSize
++  IN  CONST UINT8  *ImageBase,
++  IN  UINT64       ImageSize,
++  OUT BOOLEAN      *IsUki
+   )
+ {
+   CONST EFI_IMAGE_DOS_HEADER      *DosHeader;
+@@ -1303,9 +1356,11 @@ TorizonImageSecurityVersion (
+   UINT64                          Offset;
+   UINT64                          Size;
+   UINT64                          Index;
++  UINT64                          Position;
+   UINT32                          Version;
+   UINT8                           Digit;
+ 
++  *IsUki = FALSE;
+   if ((ImageBase == NULL) || (ImageSize < sizeof (EFI_IMAGE_DOS_HEADER))) {
+     return 0;
+   }
+@@ -1331,8 +1386,14 @@ TorizonImageSecurityVersion (
+     return 0;
+   }
+ 
++  Version = 0;
+   Section = (CONST EFI_IMAGE_SECTION_HEADER *)(ImageBase + Offset);
+   for (Index = 0; Index < FileHeader->NumberOfSections; Index++, Section++) {
++    if (CompareMem (Section->Name, mTorizonUkiLinuxSection, EFI_IMAGE_SIZEOF_SHORT_NAME) == 0) {
++      *IsUki = TRUE;
++      continue;
++    }
++
+     if (CompareMem (Section->Name, mTorizonSecurityVersionSection, EFI_IMAGE_SIZEOF_SHORT_NAME) != 0) {
+       continue;
+     }
+@@ -1340,28 +1401,27 @@ TorizonImageSecurityVersion (
+     Offset = Section->VirtualAddress;
+     Size   = Section->Misc.VirtualSize;
+     if ((Offset > ImageSize) || (Size > (ImageSize - Offset))) {
+-      return 0;
++      continue;
+     }
+ 
+     Version = 0;
+-    for (Index = 0; Index < Size; Index++) {
+-      Digit = ImageBase[Offset + Index];
++    for (Position = 0; Position < Size; Position++) {
++      Digit = ImageBase[Offset + Position];
+       if ((Digit < '0') || (Digit > '9')) {
+         break;
+       }
+ 
+       Digit -= '0';
+       if (Version > ((MAX_UINT32 - Digit) / 10)) {
+-        return MAX_UINT32;
++        Version = MAX_UINT32;
++        break;
+       }
+ 
+       Version = Version * 10 + Digit;
+     }
+-
+-    return Version;
+   }
+ 
+-  return 0;
++  return Version;
+ }
+ 
+ /**
+@@ -1373,7 +1433,15 @@ TorizonImageSecurityVersion (
+   the anti-rollback limit. The minimum is raised to the version of the
+   image when that is higher and the image is not being tried as an update
+   nor booted as a rollback, so a new release only locks out the previous
+-  ones once it was confirmed.
++  ones once it was confirmed. It is only raised with Secure Boot enabled:
++  without it, the image and its version are not verified.
++
++  The variable is created at the first boot, also for the version 0, so
++  that the operating system cannot create it with other attributes later.
++
++  With Secure Boot enabled, an image that is not a UKI is refused too: the
++  kernel, or another program signed with db, named in uEnv.txt in place of
++  the UKI.
+ 
+   Both numbers are published in a volatile variable for the operating
+   system to read.
+@@ -1381,7 +1449,8 @@ TorizonImageSecurityVersion (
+   @param[in]  KernelHandle  Handle of the loaded image
+ 
+   @retval EFI_SUCCESS             The image may be started
+-  @retval EFI_SECURITY_VIOLATION  The image is below the minimum
++  @retval EFI_SECURITY_VIOLATION  The image is below the minimum, or is not
++                                  a UKI
+ **/
+ STATIC
+ EFI_STATUS
+@@ -1392,31 +1461,65 @@ TorizonCheckSecurityVersion (
+   EFI_STATUS                 Status;
+   EFI_LOADED_IMAGE_PROTOCOL  *ImageInfo;
+   UINTN                      DataSize;
++  UINT32                     Attributes;
+   UINT32                     Version;
+   UINT32                     Minimum;
+   UINT32                     Versions[2];
++  BOOLEAN                    IsUki;
++  BOOLEAN                    Exists;
+ 
+   Status = gBS->HandleProtocol (KernelHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&ImageInfo);
+   if (EFI_ERROR (Status)) {
+     return Status;
+   }
+ 
+-  Version = TorizonImageSecurityVersion ((CONST UINT8 *)ImageInfo->ImageBase, ImageInfo->ImageSize);
++  Version = TorizonImageSecurityVersion ((CONST UINT8 *)ImageInfo->ImageBase, ImageInfo->ImageSize, &IsUki);
++  if (IsSecureBootEnabled () && !IsUki) {
++    ErrorPrint (L"%a: the boot image is not a UKI\r\n", __FUNCTION__);
++    return EFI_SECURITY_VIOLATION;
++  }
+ 
+-  Minimum  = 0;
+-  DataSize = sizeof (Minimum);
+-  Status   = gRT->GetVariable (
+-                    TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
+-                    &mTorizonBootVariableGuid,
+-                    NULL,
+-                    &DataSize,
+-                    &Minimum
+-                    );
++  Minimum    = 0;
++  Attributes = 0;
++  DataSize   = sizeof (Minimum);
++  Status     = gRT->GetVariable (
++                      TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
++                      &mTorizonBootVariableGuid,
++                      &Attributes,
++                      &DataSize,
++                      &Minimum
++                      );
+   if (Status == EFI_NOT_FOUND) {
+-    Minimum = 0;
++    Exists = FALSE;
++  } else if ((!EFI_ERROR (Status) || (Status == EFI_BUFFER_TOO_SMALL)) &&
++             (Attributes != TORIZON_SECURITY_VERSION_MIN_ATTRIBUTES))
++  {
++    //
++    // Not the variable this function creates: that one cannot be written
++    // from the operating system, so this one was put there before there
++    // was a minimum. TorizonSetVariable() replaces it below.
++    //
++    ErrorPrint (L"%a: ignoring %s, it has the attributes 0x%x\r\n", __FUNCTION__, TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME, Attributes);
++    Exists = FALSE;
+   } else if (EFI_ERROR (Status) || (DataSize != sizeof (Minimum))) {
+     ErrorPrint (L"%a: Unable to read %s: %r\r\n", __FUNCTION__, TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME, Status);
+     return EFI_SECURITY_VIOLATION;
++  } else {
++    Exists = TRUE;
++  }
++
++  if (!Exists) {
++    Minimum = 0;
++    Status  = TorizonSetVariable (
++                TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
++                TORIZON_SECURITY_VERSION_MIN_ATTRIBUTES,
++                sizeof (Minimum),
++                &Minimum
++                );
++    if (EFI_ERROR (Status)) {
++      ErrorPrint (L"%a: Failed to create %s: %r\r\n", __FUNCTION__, TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME, Status);
++      return EFI_SECURITY_VIOLATION;
++    }
+   }
+ 
+   if (Version < Minimum) {
+@@ -1424,16 +1527,15 @@ TorizonCheckSecurityVersion (
+     return EFI_SECURITY_VIOLATION;
+   }
+ 
+-  if ((Version > Minimum) &&
++  if ((Version > Minimum) && IsSecureBootEnabled () &&
+       ((mTorizonBootFlags & (TORIZON_BOOTFLAGS_UPGRADE_AVAILABLE | TORIZON_BOOTFLAGS_ROLLBACK)) == 0))
+   {
+-    Status = gRT->SetVariable (
+-                    TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
+-                    &mTorizonBootVariableGuid,
+-                    EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS,
+-                    sizeof (Version),
+-                    &Version
+-                    );
++    Status = TorizonSetVariable (
++               TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
++               TORIZON_SECURITY_VERSION_MIN_ATTRIBUTES,
++               sizeof (Version),
++               &Version
++               );
+     if (EFI_ERROR (Status)) {
+       ErrorPrint (L"%a: Failed to raise the minimum security version to %u: %r\r\n", __FUNCTION__, Version, Status);
+     } else {
+@@ -1444,13 +1546,12 @@ TorizonCheckSecurityVersion (
+ 
+   Versions[0] = Version;
+   Versions[1] = Minimum;
+-  Status      = gRT->SetVariable (
+-                       TORIZON_SECURITY_VERSIONS_VARIABLE_NAME,
+-                       &mTorizonBootVariableGuid,
+-                       EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
+-                       sizeof (Versions),
+-                       Versions
+-                       );
++  Status      = TorizonSetVariable (
++                  TORIZON_SECURITY_VERSIONS_VARIABLE_NAME,
++                  EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++                  sizeof (Versions),
++                  Versions
++                  );
+   if (EFI_ERROR (Status)) {
+     ErrorPrint (L"%a: Failed to set %s: %r\r\n", __FUNCTION__, TORIZON_SECURITY_VERSIONS_VARIABLE_NAME, Status);
+   }
+@@ -1471,7 +1572,7 @@ TorizonCheckSecurityVersion (
+ 
+ **/
+ STATIC
+-VOID
++EFI_STATUS
+ TorizonExportBootArgs (
+   IN CONST CHAR16  *BootArgs
+   )
+@@ -1482,16 +1583,21 @@ TorizonExportBootArgs (
+     BootArgs = L"";
+   }
+ 
+-  Status = gRT->SetVariable (
+-                  TORIZON_BOOTARGS_VARIABLE_NAME,
+-                  &mTorizonBootVariableGuid,
+-                  EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
+-                  StrSize (BootArgs),
+-                  (VOID *)BootArgs
+-                  );
++  //
++  // A variable of this name that the operating system made non-volatile
++  // would keep its old value: TorizonSetVariable() replaces it.
++  //
++  Status = TorizonSetVariable (
++             TORIZON_BOOTARGS_VARIABLE_NAME,
++             EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++             StrSize (BootArgs),
++             (VOID *)BootArgs
++             );
+   if (EFI_ERROR (Status)) {
+     ErrorPrint (L"%a: Failed to set %s: %r\r\n", __FUNCTION__, TORIZON_BOOTARGS_VARIABLE_NAME, Status);
+   }
++
++  return Status;
+ }
+ 
+ /**
+@@ -1755,7 +1861,13 @@ ProcessExtLinuxConfig (
+     // ones, and pass no LoadOptions so that the UKI's command line is used
+     // even when Secure Boot is disabled.
+     //
+-    TorizonExportBootArgs (UEnvBootArgs);
++    Status = TorizonExportBootArgs (UEnvBootArgs);
++    if (EFI_ERROR (Status)) {
++      //
++      // The initramfs would find no deployment, or an old one
++      //
++      return Status;
++    }
+ 
+     BootConfig->NumberOfBootOptions      = 1;
+     BootConfig->BootOptions[0].LinuxPath = UEnvKernelImage;
+@@ -2393,6 +2505,16 @@ ProcessBootParams (
+     ErrorPrint (L"Failed to validate rootfs status: %r\r\n", Status);
+   }
+ 
++  //
++  // ValidateRootfsStatus() can select the recovery boot mode, from the
++  // state of the root filesystem slots, which the operating system can
++  // write. With Secure Boot there is no other mode than the Torizon one.
++  //
++  if (IsSecureBootEnabled () && (BootParams->BootMode != NVIDIA_L4T_BOOTMODE_TORIZON)) {
++    ErrorPrint (L"%a: Secure Boot is enabled, staying in the Torizon boot mode\r\n", __FUNCTION__);
++    BootParams->BootMode = NVIDIA_L4T_BOOTMODE_TORIZON;
++  }
++
+   // Store the current boot chain in volatile variable to allow chain loading
+   Status = gRT->SetVariable (BOOT_OS_VARIABLE_NAME, &gNVIDIAPublicVariableGuid, EFI_VARIABLE_BOOTSERVICE_ACCESS|EFI_VARIABLE_RUNTIME_ACCESS, sizeof (BootParams->BootChain), &BootParams->BootChain);
+   if (EFI_ERROR (Status)) {

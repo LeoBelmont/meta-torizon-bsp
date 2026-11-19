@@ -9,6 +9,7 @@ SRC_URI += "\
     file://0003-L4TLauncher-only-use-the-Torizon-boot-mode-with-Secu.patch;patchdir=../edk2-nvidia \
     file://0004-L4TLauncher-add-an-anti-rollback-limit-for-Torizon-UK.patch;patchdir=../edk2-nvidia \
     file://0005-L4TLauncher-verify-and-use-the-devicetree-of-a-Torizon.patch;patchdir=../edk2-nvidia \
+    file://0006-L4TLauncher-close-ways-around-the-Torizon-UKI-boot-ch.patch;patchdir=../edk2-nvidia \
 "
 
 # torizon-signed: the firmware authenticates the update capsules with the
