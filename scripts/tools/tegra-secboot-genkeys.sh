@@ -103,6 +103,13 @@ fi
 if missing "capsule/signer.pem"; then
 	c="${keydir}/capsule"
 	cat > "${c}/openssl.cnf" <<EOF
+[ req ]
+distinguished_name = req_distinguished_name
+prompt = no
+
+[ req_distinguished_name ]
+CN = ${cn} capsule root
+
 [ v3_ca ]
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
@@ -115,9 +122,10 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid,issuer
 keyUsage = critical,nonRepudiation,digitalSignature,keyEncipherment
 EOF
+	# With its own configuration: the root must be a CA whatever the
+	# default configuration of openssl says
 	openssl req -new -x509 -newkey rsa:3072 -sha256 -days 7300 -nodes \
-		-subj "/CN=${cn} capsule root/" \
-		-addext "keyUsage=critical,digitalSignature,cRLSign,keyCertSign" \
+		-config "${c}/openssl.cnf" -extensions v3_ca \
 		-keyout "${c}/root.key" -out "${c}/root.crt" 2>/dev/null
 	openssl req -new -newkey rsa:3072 -sha256 -nodes \
 		-subj "/CN=${cn} capsule intermediate/" \
@@ -131,6 +139,10 @@ EOF
 	openssl x509 -req -in "${c}/signer.csr" -sha256 -days 7300 \
 		-CA "${c}/sub.crt" -CAkey "${c}/sub.key" -CAcreateserial \
 		-extfile "${c}/openssl.cnf" -extensions usr_cert -out "${c}/signer.crt" 2>/dev/null
+	if ! openssl verify -CAfile "${c}/root.crt" -untrusted "${c}/sub.crt" "${c}/signer.crt" >/dev/null 2>&1; then
+		echo "The capsule certificates do not form a valid chain, see ${c}" >&2
+		exit 1
+	fi
 	cat "${c}/signer.crt" "${c}/signer.key" > "${c}/signer.pem"
 	rm -f "${c}/sub.csr" "${c}/signer.csr" "${c}/signer.key" "${c}/signer.crt"
 fi
