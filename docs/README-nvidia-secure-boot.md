@@ -141,7 +141,11 @@ Torizon OS does not deliver capsules with its updates yet. To install one on a d
 # tegra-secboot-capsule status
 ```
 
-`install` copies the capsule to the EFI system partition and sets `OsIndications`, as the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation does. After the reboot, `status` shows "Capsule update status: 1" and the other boot chain as the current one. `TEGRA_SECBOOT_CAPSULE_IN_IMAGE = "1"` puts the capsule of the build in the image, in `/usr/share/tegra-uefi-capsules`, where `install` takes it from when no file is given: an update of the operating system then brings the capsule, and installing it stays a separate step. A boot firmware update is not undone when the operating system rolls back.
+`install` copies the capsule to the EFI system partition and sets `OsIndications`, as the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation does. After the reboot, `status` shows "Capsule update status: 1" and the other boot chain as the current one. `TEGRA_SECBOOT_CAPSULE_IN_IMAGE = "1"` puts the capsule of the build in the image, in `/usr/share/tegra-uefi-capsules`, where `install` takes it from when no file is given: an update of the operating system then brings the capsule, and installing it stays a separate step.
+
+`TEGRA_SECBOOT_CAPSULE_AUTO = "1"` makes the device take that step: a timer runs `tegra-secboot-capsule auto`, which hands the capsule of the image to the firmware when it is another one than the last one installed, and the firmware installs it at the next reboot, whenever that is. It waits while an update is being tried or was rolled back, records a capsule that the firmware refuses and does not try that one again, and at its first run only records the capsule of the image as the one installed, as on a device that was just flashed. So a device that gets this setting with an update takes its first capsule from the update after that one. The state is in `/var/lib/tegra-secboot`.
+
+A boot firmware update is not undone when the operating system rolls back, and a deployment booted on purpose with an older capsule gets that older firmware installed again.
 
 Changing the enrolled keys
 --------------------------
@@ -222,6 +226,8 @@ And with that image built with `TEGRA_SECBOOT_UEFI_MENU = "0"` and `TEGRA_SECBOO
 - the firmware does not offer its setup menu, boot menu or shell, and boots the UKI;
 - the kernel prints nothing on the serial console and there is no login on it; the boot firmware and L4TLauncher still print there;
 - when L4TLauncher refuses a changed boot image, the firmware does not try the network, and stops with "Unable to boot, system will halt".
+
+`tegra-secboot-capsule auto` was run by hand on that Jetson: it installs another capsule than the recorded one at the next reboot, waits while an update is pending, and does not try a capsule again that the firmware refused. Its timer is not built yet.
 
 Still to be verified on a Jetson: the update client (the updates above were deployed by hand), `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 

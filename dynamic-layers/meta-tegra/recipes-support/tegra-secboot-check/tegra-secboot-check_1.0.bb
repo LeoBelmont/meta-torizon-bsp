@@ -15,7 +15,22 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/../../../../scripts/tools:"
 SRC_URI = "\
     file://tegra-secboot-check.sh \
     file://tegra-secboot-capsule.sh \
+    file://tegra-secboot-capsule-auto.service \
+    file://tegra-secboot-capsule-auto.timer \
 "
+
+inherit systemd
+
+# ${PN}-capsule-auto: the timer that runs "tegra-secboot-capsule auto", to
+# install the capsule of the image when an update brought another one
+PACKAGES =+ "${PN}-capsule-auto"
+SYSTEMD_PACKAGES = "${PN}-capsule-auto"
+SYSTEMD_SERVICE:${PN}-capsule-auto = "tegra-secboot-capsule-auto.timer"
+FILES:${PN}-capsule-auto = "\
+    ${systemd_system_unitdir}/tegra-secboot-capsule-auto.service \
+    ${systemd_system_unitdir}/tegra-secboot-capsule-auto.timer \
+"
+RDEPENDS:${PN}-capsule-auto = "${PN} tegra-uefi-capsules"
 
 S = "${UNPACKDIR}"
 
@@ -25,4 +40,6 @@ do_compile[noexec] = "1"
 do_install() {
     install -D -m 0755 ${UNPACKDIR}/tegra-secboot-check.sh ${D}${sbindir}/tegra-secboot-check
     install -D -m 0755 ${UNPACKDIR}/tegra-secboot-capsule.sh ${D}${sbindir}/tegra-secboot-capsule
+    install -D -m 0644 ${UNPACKDIR}/tegra-secboot-capsule-auto.service ${D}${systemd_system_unitdir}/tegra-secboot-capsule-auto.service
+    install -D -m 0644 ${UNPACKDIR}/tegra-secboot-capsule-auto.timer ${D}${systemd_system_unitdir}/tegra-secboot-capsule-auto.timer
 }

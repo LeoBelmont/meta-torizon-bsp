@@ -140,6 +140,12 @@ IMAGE_INSTALL:append = " setup-nv-boot-control-service util-linux-lsblk"
 TEGRA_SECBOOT_CAPSULE_IN_IMAGE ?= "0"
 TEGRA_UEFI_CAPSULE_INSTALL_DIR ?= "${datadir}/tegra-uefi-capsules"
 IMAGE_INSTALL:append = "${@' tegra-uefi-capsules' if d.getVar('TEGRA_SECBOOT_CAPSULE_IN_IMAGE') == '1' else ''}"
+# Set to "1" to have the device install that capsule: a timer runs
+# "tegra-secboot-capsule auto", which hands the capsule to the firmware when
+# a confirmed update brought another one than the one installed. It is then
+# installed at the next reboot. This puts the capsule in the image too.
+TEGRA_SECBOOT_CAPSULE_AUTO ?= "0"
+IMAGE_INSTALL:append = "${@' tegra-secboot-check-capsule-auto' if d.getVar('TEGRA_SECBOOT_CAPSULE_AUTO') == '1' else ''}"
 
 # Set to "0" to build the UEFI firmware without its setup menu, boot menu,
 # shell and network boot, for production devices.

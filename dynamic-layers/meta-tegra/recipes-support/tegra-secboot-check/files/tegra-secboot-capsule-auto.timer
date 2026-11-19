@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a boot firmware capsule to install
+
+[Timer]
+# Not right at boot: an update is confirmed some time after it
+OnBootSec=2min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Install the boot firmware capsule that an update brought
+Documentation=https://github.com/torizon/meta-torizon-bsp/blob/master/docs/README-nvidia-secure-boot.md
+ConditionPathExists=/usr/share/tegra-uefi-capsules/tegra-bl.cap
+After=setup-nv-boot-control.service local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/tegra-secboot-capsule auto

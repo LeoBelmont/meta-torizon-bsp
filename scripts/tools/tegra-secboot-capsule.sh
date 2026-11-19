@@ -7,6 +7,7 @@
 #
 #   tegra-secboot-capsule status
 #   tegra-secboot-capsule install [CAPSULE]
+#   tegra-secboot-capsule auto [CAPSULE]
 #
 # "install" copies the capsule to the EFI system partition and asks the UEFI
 # firmware to process it at the next boot: reboot to install it. The firmware
@@ -14,12 +15,20 @@
 # boot chain that is not running, and boots from it. Without CAPSULE, the
 # capsule of the image is used (TEGRA_SECBOOT_CAPSULE_IN_IMAGE = "1").
 #
+# "auto" is what tegra-secboot-capsule-auto.timer runs, to install the
+# capsule that an update of the operating system brings: it does "install"
+# when the capsule is another one than the last one installed, and the
+# update is confirmed. The capsule is then installed at the next reboot,
+# whenever that is. The first run only records the capsule of the image as
+# the one installed, as on a device that was just flashed.
+#
 # See docs/README-nvidia-secure-boot.md, "Firmware update capsules".
 
 EFIVARS=/sys/firmware/efi/efivars
 EFI_GLOBAL=8be4df61-93ca-11d2-aa0d-00e098032b8c
 NVIDIA_GUID=781e084c-a330-417c-b678-38e696380cb9
 DEFAULT_CAPSULE=/usr/share/tegra-uefi-capsules/tegra-bl.cap
+STATE_DIR="${TEGRA_SECBOOT_STATE_DIR:-/var/lib/tegra-secboot}"
 ESP_DEV=/dev/disk/by-partlabel/esp
 ESP_FILE=EFI/UpdateCapsule/TEGRA_BL.Cap
 
@@ -102,8 +111,70 @@ install_capsule() {
 	echo "Reboot to install it, then run \"tegra-secboot-capsule status\"."
 }
 
+# state NAME: the content of a state file, or nothing
+state() { cat "${STATE_DIR}/$1" 2>/dev/null; }
+
+auto() {
+	cap="${1:-$DEFAULT_CAPSULE}"
+	[ "$(id -u)" = "0" ] || die "run as root"
+	if [ ! -s "$cap" ]; then
+		echo "no capsule at $cap: nothing to do"
+		return 0
+	fi
+	mkdir -p "$STATE_DIR" || die "cannot create $STATE_DIR"
+	sum="$(sha256sum "$cap" | cut -d' ' -f1)"
+	boot="$(cat /proc/sys/kernel/random/boot_id)"
+
+	# A capsule staged in an earlier boot: record what the firmware did with it
+	if [ -n "$(state staged)" ] && [ "$(state staged-boot)" != "$boot" ]; then
+		staged="$(state staged)"
+		rm -f "${STATE_DIR}/staged" "${STATE_DIR}/staged-boot"
+		if nvbootctrl dump-slots-info 2>/dev/null | grep -q "^Capsule update status: 1"; then
+			echo "$staged" > "${STATE_DIR}/installed"
+			rm -f "${STATE_DIR}/failed"
+			echo "the capsule ${staged%${staged#????????????}} was installed"
+		else
+			echo "$staged" > "${STATE_DIR}/failed"
+			echo "the firmware did not install the capsule ${staged%${staged#????????????}}: see \"status\"" >&2
+		fi
+	fi
+
+	if [ -z "$(state installed)" ]; then
+		# First run: the boot firmware is the one flashed with this image
+		echo "$sum" > "${STATE_DIR}/installed"
+		echo "recorded the capsule of the image as the installed one"
+		return 0
+	fi
+	if [ "$(state installed)" = "$sum" ]; then
+		echo "the capsule of the image is installed already"
+		return 0
+	fi
+	if [ "$(state failed)" = "$sum" ]; then
+		echo "the firmware refused this capsule before: not trying again"
+		return 0
+	fi
+	if [ "$(state staged)" = "$sum" ]; then
+		echo "the capsule is waiting for the next reboot"
+		return 0
+	fi
+	# Not while an update is being tried, or after it was rolled back: the
+	# deployment that is running may not be the one that stays
+	if command -v fw_printenv >/dev/null 2>&1; then
+		flags="$(fw_printenv upgrade_available rollback 2>/dev/null | tr '\n' ' ')"
+		case "$flags" in
+		*upgrade_available=1*|*rollback=1*)
+			echo "the update is not confirmed ($flags): not installing the capsule yet"
+			return 0 ;;
+		esac
+	fi
+	install_capsule "$cap" || return 1
+	echo "$sum" > "${STATE_DIR}/staged"
+	echo "$boot" > "${STATE_DIR}/staged-boot"
+}
+
 case "$1" in
 status) status ;;
 install) install_capsule "$2" ;;
-*) sed -n '5,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+auto) auto "$2" ;;
+*) sed -n '5,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
