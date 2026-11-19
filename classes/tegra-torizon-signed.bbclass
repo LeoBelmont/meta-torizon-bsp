@@ -41,6 +41,7 @@ IMAGE_CLASSES:append = " uki"
 IMAGE_CLASSES:remove:pn-tegra-minimal-initramfs = "uki"
 IMAGE_CLASSES:remove:pn-tegra-initrd-flash-initramfs = "uki"
 IMAGE_CLASSES:remove:pn-tegra-espimage = "uki"
+IMAGE_CLASSES:remove:pn-tegra-secboot-halt-initramfs = "uki"
 # ukify signs with sbsign: a task depending on a do_populate_sysroot gets it
 # in its recipe sysroot (staging.bbclass), as the meta-tegra signing tasks do
 do_uki[depends] += "sbsigntool-native:do_populate_sysroot"
@@ -52,6 +53,13 @@ UKI_SB_KEY = "${TEGRA_UEFI_DB_KEY}"
 UKI_SB_CERT = "${TEGRA_UEFI_DB_CERT}"
 # As an override: torizon.bbclass is inherited after this class and sets it
 OSTREE_DEPLOY_DEVICETREE:tegra-signed = "0"
+
+# The kernel partition, which L4TLauncher boots when told to
+# (bootmode=bootimg), gets an image that stops instead of the meta-tegra
+# one: that one boots the root filesystem without verifying it, and has a
+# shell on failure.
+IMAGE_TEGRAFLASH_KERNEL:tegra-signed = "${DEPLOY_DIR_IMAGE}/tegra-secboot-halt-initramfs-${MACHINE}.cboot"
+do_image_tegraflash_tar[depends] += "tegra-secboot-halt-initramfs:do_image_complete"
 
 # Key for signing the kernel modules: a PEM file with the private key and
 # the certificate. The kernel embeds the certificate and, with

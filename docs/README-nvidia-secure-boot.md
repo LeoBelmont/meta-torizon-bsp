@@ -2,7 +2,7 @@ Secure Boot on NVIDIA Jetson
 ============================
 
 > [!WARNING]
-> Draft: not yet validated on hardware. Do not fuse production devices with it.
+> Draft: validated in QEMU up to the login prompt (see "Test status"), not yet on a Jetson. Do not fuse production devices with it.
 
 Torizon OS enables Secure Boot on Jetson the same way as on the Toradex SoMs, with the `torizon-signed` class. On Jetson, the class uses UEFI Secure Boot with a signed Unified Kernel Image (UKI), like the x86 support, and composefs to verify the root filesystem.
 
@@ -23,7 +23,9 @@ The kernel runs in lockdown integrity mode.
 
 `uEnv.txt` is not signed: OSTree writes it on the device at every deployment. With Secure Boot, L4TLauncher only takes from it which UKI to boot, and the initramfs only takes which OSTree deployment to mount (`ostree=`), which composefs then verifies. A rollback picks another signed UKI and deployment the same way.
 
-When the Torizon boot fails, L4TLauncher does not fall back to the kernel partition as it does on unsigned images: the image in that partition boots the root filesystem without verifying it.
+When the Torizon boot fails, L4TLauncher does not fall back to the kernel partition as it does on unsigned images, and while an update is being tried it resets instead, so that the boot counter runs out and the previous deployment is booted. The kernel partition itself gets an image that only prints a message and stops (`tegra-secboot-halt-initramfs`), instead of the meta-tegra one, which boots the root filesystem without verifying it.
+
+composefs verifies the root filesystem in two ways. The composefs image of the deployment must have the fs-verity digest recorded in the signed OSTree commit, or the deployment is not mounted and the boot stops. The content of the files is verified by fs-verity when it is read: a block changed behind the filesystem gives an I/O error instead of the changed data, so such a system may still boot, without the affected files.
 
 The devicetree is only verified on fused devices: without the boot chain keys fused, nothing checks the UEFI firmware image that carries it.
 
@@ -85,20 +87,39 @@ UEFI Secure Boot alone does not protect the boot chain before UEFI: on a device 
 1. Fuse the keys following NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/Security/SecureBoot.html) documentation (`odmfuse.sh` of the L4T kit). Test the procedure on a device you can afford to lose first.
 2. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"` (and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused). meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the bootloader update payloads.
 
+Key sets
+--------
+
+A key set is one directory, as created by `tegra-secboot-genkeys.sh`: use a separate one for development, for test units, and for production, and select it with `TEGRA_SECBOOT_KEYDIR` (and `CFS_SIGN_KEYDIR` for the composefs keys). A device enrolled with one set only boots, and is only reflashed with, images signed with that set. Production keys are created and kept by whoever owns the product; the development keys this script creates are for engineering units only.
+
+Test status
+-----------
+
+Verified on the built images, and by booting the signed image in QEMU (`virt` machine, UEFI firmware with the image's PK, KEK and db enrolled):
+
+- the firmware boots the signed UKI, and refuses a UKI with one bit changed and an unsigned kernel;
+- with Secure Boot, a kernel command line passed to the UKI is ignored;
+- the kernel is locked down, loads the signed modules and refuses an unsigned one;
+- the initramfs takes the deployment from the `TorizonBootArgs` variable, and stops when the variable is missing or does not name an OSTree boot link;
+- composefs mounts the deployment in `signed` mode, refuses a replaced composefs image, and fs-verity reports a block changed behind the filesystem;
+- the system reaches the login prompt, and `ostree admin status` shows the booted deployment.
+
+Still to be verified on a Jetson: the enrollment of the keys by the NVIDIA firmware, L4TLauncher booting the UKI (and not falling back), the NVIDIA drivers and tools with lockdown, updates and rollback, and reflashing with Secure Boot enabled.
+
 Limitations and open points
 ---------------------------
 
-- **Not validated on hardware**, in particular:
+- **Not validated on a Jetson**, in particular:
   - the L4TLauncher change (`0002-L4TLauncher-boot-signed-UKIs-in-the-Torizon-boot-mode.patch`) builds, but has not booted yet;
   - `UefiDefaultSecurityKeys.dts` is written from what the firmware reads (`NvSecureBootProvisionDxe` and `DefaultVariableDxe` in edk2-nvidia), not yet compared with the output of `gen_uefi_keys_dts.sh` of the L4T kit.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
-- **The kernel partition** still holds the meta-tegra boot image (signed with db), whose initramfs boots the root filesystem without verifying it and has a shell on failure. L4TLauncher no longer falls back to it, but still boots it when its boot mode is changed (`bootmode=bootimg` in the boot option, or the `L4TDefaultBootMode` variable), which root can do at run time. It should get an image that stops instead; the Torizon OS initramfs may not fit the 80 MB partition next to the kernel.
 - **UEFI setup menu and shell**: they are part of the firmware and not disabled yet. From the setup menu, Secure Boot can be turned off by someone with access to the console.
 - **Other db-signed images**: with Secure Boot, L4TLauncher boots any image signed with db that `uEnv.txt` points to, not only a UKI. meta-tegra also signs the plain kernel with db; it gets no initramfs and no command line from `uEnv.txt`, so it should stop without a root filesystem: to be confirmed on hardware.
-- **Rollback of a failed update**: a deployment whose UKI does not load now returns to the UEFI boot manager instead of the kernel partition. Check that the boot counting of the Torizon boot mode still rolls back.
+- **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
 - **UEFI key updates over the air** (db/dbx), as the x86 support does with Torizon subsystem updates, are not supported yet.
+- **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.
 - Only the Jetson Orin Nano is covered. Thor (T264) uses other boot chain keys.
