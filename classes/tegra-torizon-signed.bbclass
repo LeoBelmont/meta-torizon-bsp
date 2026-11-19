@@ -126,6 +126,9 @@ TEGRA_UEFI_CAPSULE_SIGNING_EXTRA_DEPS:append = " tegra-secboot-halt-initramfs:do
 # and shell, for production devices.
 TEGRA_SECBOOT_UEFI_MENU ?= "1"
 
+# tegra-secboot-check, to check on the device that it booted as intended
+IMAGE_INSTALL:append = " tegra-secboot-check"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"
