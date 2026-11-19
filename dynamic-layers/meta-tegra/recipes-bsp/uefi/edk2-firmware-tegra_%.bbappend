@@ -13,6 +13,10 @@ SRC_URI += "\
 # meta-tegra builds in, whose private key is public.
 SRC_URI:append:tegra-signed = " file://torizon-fmp-certificates.cfg"
 
+# TEGRA_SECBOOT_UEFI_MENU = "0" leaves the setup menu, the boot menu and the
+# shell out of the firmware, for production devices.
+SRC_URI:append:tegra-signed = "${@'' if d.getVar('TEGRA_SECBOOT_UEFI_MENU') != '0' else ' file://torizon-no-menu.cfg'}"
+
 # The include file that torizon-fmp-certificates.cfg names, in the format
 # BinToPcd.py --xdr writes: the length of the certificate (DER) as 32 bits
 # big endian, then the certificate, padded to a multiple of 4 bytes. The

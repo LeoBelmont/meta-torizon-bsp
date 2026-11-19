@@ -122,6 +122,10 @@ UEFI_CAPSULE_TRUSTED_PUBLIC_CERT ?= "${TEGRA_UEFI_CAPSULE_KEYDIR}/root.crt"
 # The capsule carries the image of the kernel partition
 TEGRA_UEFI_CAPSULE_SIGNING_EXTRA_DEPS:append = " tegra-secboot-halt-initramfs:do_image_complete"
 
+# Set to "0" to build the UEFI firmware without its setup menu, boot menu
+# and shell, for production devices.
+TEGRA_SECBOOT_UEFI_MENU ?= "1"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"

@@ -109,6 +109,13 @@ Firmware update capsules
 
 Torizon OS does not deliver capsules with its updates yet. To install one by hand, follow the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation.
 
+Production devices
+------------------
+
+`TEGRA_SECBOOT_UEFI_MENU = "0"` builds the UEFI firmware without its setup menu, boot menu and shell, and with no boot delay. Leave it at its default while developing: the menu shows the Secure Boot state.
+
+The firmware of the development kits is already configured (`CONFIG_SECURITY_DISABLE_PHYSICAL_PRESENCE_POST_SECUREBOOT`) to refuse changes to the Secure Boot state and keys from the menu once Secure Boot is enabled.
+
 Boot chain signing and fusing
 -----------------------------
 
@@ -134,7 +141,7 @@ Verified on the built images, and by booting the signed image in QEMU (`virt` ma
 - composefs mounts the deployment in `signed` mode, refuses a replaced composefs image, and fs-verity reports a block changed behind the filesystem;
 - the system reaches the login prompt, and `ostree admin status` shows the booted deployment.
 
-The capsule keys were only checked with the EDK2 capsule tool: a capsule signed with them verifies against the root certificate, and not against the EDK2 test certificate. The firmware configuration for the capsule certificate was checked with the configuration tool of the firmware, not built.
+The capsule keys were only checked with the EDK2 capsule tool: a capsule signed with them verifies against the root certificate, and not against the EDK2 test certificate. The firmware configuration for the capsule certificate and for `TEGRA_SECBOOT_UEFI_MENU` was checked with the configuration tool of the firmware, not built.
 
 Still to be verified on a Jetson: the enrollment of the keys by the NVIDIA firmware, L4TLauncher booting the UKI (and not falling back), the NVIDIA drivers and tools with lockdown, updates and rollback, and reflashing with Secure Boot enabled.
 
@@ -146,7 +153,7 @@ Limitations and open points
   - `UefiDefaultSecurityKeys.dts` is written from what the firmware reads (`NvSecureBootProvisionDxe` and `DefaultVariableDxe` in edk2-nvidia), not yet compared with the output of `gen_uefi_keys_dts.sh` of the L4T kit.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
-- **UEFI setup menu and shell**: they are part of the firmware and not disabled yet. From the setup menu, Secure Boot can be turned off by someone with access to the console.
+- **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
 - **Capsules**: the capsule keys are in place, but no capsule has been installed on a device, and Torizon OS updates do not deliver them.
 - **Other db-signed images**: with Secure Boot, L4TLauncher boots any image signed with db that `uEnv.txt` points to, not only a UKI. meta-tegra also signs the plain kernel with db; it gets no initramfs and no command line from `uEnv.txt`, so it should stop without a root filesystem: to be confirmed on hardware.
 - **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
