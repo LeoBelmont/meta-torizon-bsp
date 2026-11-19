@@ -90,6 +90,14 @@ $ scripts/tools/tegra-secboot-verify-package.py [--capsule tegra-bl.cap] <packag
 
 It checks the certificates in the key overlay, the signatures of the boot loader and of the boot image, that the boot image is a UKI, the signatures of the kernel modules, the image of the kernel partition and the trusted application key in OP-TEE, and exits with 1 when one of them fails. It only needs the public parts of the key directory.
 
+`scripts/tools/tegra-secboot-flash.sh` flashes one device in recovery mode and says whether it worked:
+
+```
+$ sudo scripts/tools/tegra-secboot-flash.sh [--keydir /path/to/keydir] [--usb-instance <port>] <package>.tegraflash-tar.zst
+```
+
+It unpacks the package into a directory of its own, checks the root filesystem image, runs the check above first when a key directory is given, runs `initrd-flash`, and exits with 0 only when the device reported that it was flashed. To flash several devices at once, run one instance per device, each with its `--usb-instance`. On a host without udisks2, which `initrd-flash` uses to release the USB storage that the device exports, it supplies a stand-in that disables the USB port of the device for a few seconds; without one, the host can miss what the device exports next. Tested on an Orin Nano behind a USB 3 hub, on a host without udisks2.
+
 A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. NVIDIA documents that Secure Boot enabled at flashing time, as here, cannot be disabled unless the device is flashed again.
 
 UEFI Secure Boot does not protect the flashing path. `initrd-flash` boots its image over USB with a minimal firmware that does not enforce Secure Boot (its kernel logs "Secure boot disabled"), so on a device whose boot chain keys are not fused, any package can be flashed, signed or not, and the flash removes the enrolled keys. Tested on an Orin Nano: an unsigned package flashed over a device with enrolled keys, which then booted with Secure Boot off. Only the fused boot chain keys restrict what the recovery mode accepts.
