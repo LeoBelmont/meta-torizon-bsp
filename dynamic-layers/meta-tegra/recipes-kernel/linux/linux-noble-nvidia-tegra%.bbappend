@@ -19,6 +19,11 @@ SRC_URI:append:tegra-signed = " \
     ${@'file://tegra-signed-lockdown.cfg' if d.getVar('TEGRA_SECBOOT_LOCKDOWN') == '1' else ''} \
 "
 
+# Strip the debug information from the modules when they are installed,
+# before they are signed: packaging leaves signed modules as they are, as
+# stripping them later would drop the signature.
+EXTRA_OEMAKE:append:tegra-signed = " INSTALL_MOD_STRIP=1"
+
 TEGRA_MODSIGN_KEY ??= ""
 TEGRA_SECBOOT_LOCKDOWN ??= "1"
 
