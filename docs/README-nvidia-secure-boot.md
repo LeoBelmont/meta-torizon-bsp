@@ -4,7 +4,7 @@ Secure Boot on NVIDIA Jetson
 > [!WARNING]
 > Draft: validated in QEMU up to the login prompt (see "Test status"), not yet on a Jetson. Do not fuse production devices with it.
 
-Torizon OS enables Secure Boot on Jetson the same way as on the Toradex SoMs, with the `torizon-signed` class. On Jetson, the class uses UEFI Secure Boot with a signed Unified Kernel Image (UKI), like the x86 support, and composefs to verify the root filesystem.
+Torizon OS enables Secure Boot on Jetson the same way as on the Toradex SoMs, with the `torizon-signed` class. On Jetson, the class uses UEFI Secure Boot with a signed Unified Kernel Image (UKI), and composefs to verify the root filesystem.
 
 Chain of trust
 --------------
@@ -201,8 +201,31 @@ Boot chain signing and fusing
 
 UEFI Secure Boot alone does not protect the boot chain before UEFI: on a device without fused keys, anyone with access to the recovery port can flash another UEFI firmware. Fusing the PKC key (and optionally the SBK key) closes that, and is **irreversible**: a device fused with a key only boots images signed with it, and a mistake bricks it.
 
-1. Fuse the keys following NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/SecureBoot.html) documentation (`odmfuse.sh` of the L4T kit). Test the procedure on a device you can afford to lose first.
-2. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"` (and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused). meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the bootloader update payloads.
+The keys for it are in `bootchain/` of the key directory, created with `tegra-secboot-genkeys.sh --bootchain`:
+
+| File | Use |
+| --- | --- |
+| `pkc.pem`, `pkc1.pem`, `pkc2.pem` | RSA-3072 keys whose hashes are fused. The build signs the boot chain with `pkc.pem`; the other two are there because the hashes can only be fused once, and a fused key can be revoked later. |
+| `sbk.key` | The key the boot chain is encrypted with, when it is fused too |
+| `oem_k1.key`, `oem_k2.key` | Fuse keys OemK1 and OemK2. OemK1 is the key of the EKB, the blob that OP-TEE reads its keys from. |
+| `ekb_auth.key`, `ekb_sym2.key` | Keys inside the EKB: for the authentication of the UEFI variables, and for disk encryption |
+
+The steps, of which only the first three were tried, on a build host, and none on a device:
+
+1. Write the fuse configuration file:
+
+   ```
+   $ scripts/tools/tegra-secboot-fuse-config.py --boot-security-info <value> [--sbk] [--oem-k1] [--disable-jtag] [--security-mode] \
+         --tegraflash-dir <unpacked package> -o fuse.xml /path/to/keydir
+   ```
+
+   It computes the public key hashes and compares them with what NVIDIA's `tegrasign_v3.py` of an unpacked flash package computes, converts the key files to fuse values, and checks that `BootSecurityInfo` agrees with the keys and options. It writes a file and nothing else. `BootSecurityInfo` has no default: its value depends on the module, and NVIDIA states that newer Orin modules come with some of its bits burned. Take it, and other fuses the module needs (`--extra-fuse`), from NVIDIA's fuse specification for the module. `--security-mode` is the fuse that makes the device enforce the others; `--disable-jtag` closes the debug port.
+
+2. Make a fuse blob from it with `fskp_fuseburn.py` of NVIDIA's L4T kit, first with `--test`: NVIDIA documents that such a blob is sent to the device without burning anything. See the quick start of NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/SecureBoot.html) documentation, and [FSKP](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/FSKP.html) for a blob that is encrypted for the factory.
+
+3. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"`, and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused. meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the capsule, so the flashing host needs no key. With OemK1 fused, also set `TEGRA_SECBOOT_EKB = "1"`: the EKB is then built with OemK1 and the keys of the key set. Without it, a device with OemK1 fused does not get past its firmware; with it, a device without OemK1 fused does not either.
+
+4. Burn the fuses of one device you can afford to lose, with a blob made with `--burn`, flash it with that build, and check that it boots, and that it refuses a package that is unsigned or signed with another key.
 
 Key sets
 --------
