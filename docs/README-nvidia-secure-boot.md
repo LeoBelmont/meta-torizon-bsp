@@ -151,7 +151,7 @@ Verified on the built images, and by booting the signed image in QEMU (`virt` ma
 - the system reaches the login prompt, and `ostree admin status` shows the booted deployment;
 - an update: a second signed commit deployed with `ostree admin deploy` boots with its own UKI, `uEnv.txt` keeps `uki=1` and lists the previous deployment as the second entry, and that one still boots afterwards. The update client and L4TLauncher were not part of this test.
 
-The capsule keys were only checked with the EDK2 capsule tool: a capsule signed with them verifies against the root certificate, and not against the EDK2 test certificate. The firmware configuration for the capsule certificate and for `TEGRA_SECBOOT_UEFI_MENU` was checked with the configuration tool of the firmware, not built.
+`tegra-uefi-capsules` builds the capsule with the firmware and OP-TEE of the image. Its signature has the signing and intermediate certificates of the key set, and verifies with the EDK2 capsule tool against the root certificate of the key set, not against the EDK2 test certificate. The built firmware holds that root certificate and no longer the test one, and the built OP-TEE holds the trusted application key of the key set. `TEGRA_SECBOOT_UEFI_MENU` was checked with the configuration tool of the firmware, not built.
 
 Still to be verified on a Jetson: the enrollment of the keys by the NVIDIA firmware, L4TLauncher booting the UKI (and not falling back), the NVIDIA drivers and tools with lockdown, updates and rollback, and reflashing with Secure Boot enabled.
 
@@ -164,7 +164,7 @@ Limitations and open points
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
-- **Capsules**: the capsule keys are in place, but no capsule has been installed on a device, and Torizon OS updates do not deliver them.
+- **Capsules**: the capsule builds and verifies on the host, but none has been installed on a device, and Torizon OS updates do not deliver them.
 - **Other db-signed images**: with Secure Boot, L4TLauncher boots any image signed with db that `uEnv.txt` points to, not only a UKI. meta-tegra also signs the plain kernel with db; it gets no initramfs and no command line from `uEnv.txt`, so it should stop without a root filesystem: to be confirmed on hardware.
 - **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
