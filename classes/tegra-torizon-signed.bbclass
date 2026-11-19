@@ -58,6 +58,38 @@ OSTREE_DEPLOY_DEVICETREE:tegra-signed = "0"
 # CONFIG_MODULE_SIG_FORCE, rejects unsigned modules, out-of-tree ones too.
 TEGRA_MODSIGN_KEY ?= "${TEGRA_SECBOOT_KEYDIR}/modsign/modsign_key.pem"
 
+# Fail the build when an image has a module without a signature, which the
+# kernel would refuse to load. The Ubuntu based kernel leaves the staging
+# drivers that are not in its debian/signature-inclusion list unsigned on
+# purpose: TEGRA_MODSIGN_UNSIGNED_OK lists the directories, relative to the
+# modules directory of the kernel, where unsigned modules are accepted.
+TEGRA_MODSIGN_UNSIGNED_OK ?= "kernel/drivers/staging/"
+
+tegra_signed_check_modules() {
+    unsigned=""
+    for ko in $(find ${IMAGE_ROOTFS}${nonarch_base_libdir}/modules -name '*.ko' 2>/dev/null); do
+        if tail -c 28 "$ko" | grep -aq 'Module signature appended'; then
+            continue
+        fi
+        rel="${ko#${IMAGE_ROOTFS}${nonarch_base_libdir}/modules/*/}"
+        accepted=""
+        for dir in ${TEGRA_MODSIGN_UNSIGNED_OK}; do
+            case "$rel" in
+                "$dir"*) accepted="1" ;;
+            esac
+        done
+        if [ -n "$accepted" ]; then
+            bbnote "Unsigned module accepted (TEGRA_MODSIGN_UNSIGNED_OK): $rel"
+        else
+            unsigned="$unsigned $rel"
+        fi
+    done
+    if [ -n "$unsigned" ]; then
+        bbfatal "Kernel modules without a signature, which the kernel would refuse to load:$unsigned"
+    fi
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " tegra_signed_check_modules"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"
