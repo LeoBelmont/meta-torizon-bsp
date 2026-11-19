@@ -145,6 +145,44 @@ IMAGE_INSTALL:append = "${@' tegra-uefi-capsules' if d.getVar('TEGRA_SECBOOT_CAP
 # shell and network boot, for production devices.
 TEGRA_SECBOOT_UEFI_MENU ?= "1"
 
+# Set to "0" for production devices: no kernel console and no login on the
+# serial console. The boot firmware still prints there.
+TEGRA_SECBOOT_SERIAL_CONSOLE ?= "1"
+# Set to "0" for production devices: the SSH server is not started.
+TEGRA_SECBOOT_SSH ?= "1"
+
+def tegra_secboot_serial_ttys(d):
+    return [c.split(';')[1] for c in (d.getVar('SERIAL_CONSOLES') or '').split() if ';' in c]
+
+def tegra_secboot_serial_console_args(d):
+    if d.getVar('TEGRA_SECBOOT_SERIAL_CONSOLE') != '0':
+        return ''
+    return ' '.join('console=%s,%s' % (c.split(';')[1], c.split(';')[0])
+                    for c in (d.getVar('SERIAL_CONSOLES') or '').split() if ';' in c)
+
+# KERNEL_ARGS is part of the command line of the UKI and of the kernel
+KERNEL_ARGS:remove = "${@tegra_secboot_serial_console_args(d)}"
+
+tegra_signed_interfaces() {
+    # Only the images with systemd: not the initramfs images
+    [ -d ${IMAGE_ROOTFS}${systemd_system_unitdir} ] || return 0
+    install -d ${IMAGE_ROOTFS}${sysconfdir}/systemd/system
+    if [ "${TEGRA_SECBOOT_SERIAL_CONSOLE}" = "0" ]; then
+        for tty in ${@' '.join(tegra_secboot_serial_ttys(d))}; do
+            ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/serial-getty@$tty.service
+        done
+    fi
+    if [ "${TEGRA_SECBOOT_SSH}" = "0" ]; then
+        for unit in sshd.socket sshd.service sshd@.service; do
+            ln -sf /dev/null ${IMAGE_ROOTFS}${sysconfdir}/systemd/system/$unit
+        done
+    fi
+    # Do not show kernel addresses, also not to root
+    install -d ${IMAGE_ROOTFS}${nonarch_libdir}/sysctl.d
+    echo "kernel.kptr_restrict = 2" > ${IMAGE_ROOTFS}${nonarch_libdir}/sysctl.d/60-tegra-secboot.conf
+}
+ROOTFS_POSTPROCESS_COMMAND:append = " tegra_signed_interfaces"
+
 # tegra-secboot-check and tegra-secboot-capsule, to check on the device
 # that it booted as intended and to install capsules
 IMAGE_INSTALL:append = " tegra-secboot-check"
