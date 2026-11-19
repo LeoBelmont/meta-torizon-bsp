@@ -78,7 +78,7 @@ This makes `torizon-signed` inherit `tegra-torizon-signed` (meta-torizon-bsp) in
 
 Keep the key directory. Once the keys are enrolled, the device only boots images signed with them, and that includes the flashing image that `initrd-flash` boots over USB: L4TLauncher verifies it when Secure Boot is enabled. So a device with enrolled keys is reflashed with a package signed with the same keys.
 
-A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. To flash an unsigned image, or one signed with other keys, first turn Secure Boot off in the UEFI setup menu (ESC at boot on the serial console, then Device Manager, Secure Boot Configuration), or rewrite the QSPI flash with NVIDIA's `flash.sh`.
+A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. NVIDIA documents that Secure Boot enabled at flashing time, as here, cannot be disabled unless the device is flashed again. Whether a package that is unsigned, or signed with other keys, can be flashed while Secure Boot is enabled is to be confirmed on hardware; rewriting the QSPI flash with NVIDIA's `flash.sh` clears the keys in any case.
 
 The UEFI firmware only creates the default key variables when they do not exist. An update of the firmware alone (e.g. a capsule) therefore does not change the enrolled keys.
 
@@ -120,6 +120,19 @@ Firmware update capsules
 `bitbake tegra-uefi-capsules` builds `tegra-bl.cap`, the capsule that updates the boot chain, signed with `capsule/signer.pem`. The UEFI firmware of a signed build only accepts capsules that chain to `capsule/root.crt`. The firmware a device runs decides which certificate is trusted: a device flashed before this change still trusts the EDK2 test certificate until its firmware is replaced.
 
 Torizon OS does not deliver capsules with its updates yet. To install one by hand, follow the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation.
+
+Changing the enrolled keys
+--------------------------
+
+The KEK, `db` and `dbx` of a device can be changed with signed updates, the way NVIDIA documents it: the updates travel in a firmware update capsule, and the firmware applies them when it installs the capsule.
+
+1. Create the signed updates with `sign-efi-sig-list` of efitools: a KEK update is signed with the PK, a `db` or `dbx` update with the KEK.
+2. Put them in `<keydir>/uefi/update/` as `KEK_<n>.auth`, `db_<n>.auth` and `dbx_<n>.auth`.
+3. Build the capsule: `bitbake tegra-uefi-capsules`. The build writes `UefiUpdateSecurityKeys.dtbo` and meta-tegra adds it to the capsule.
+
+Revoking a boot image means adding its hash, or the certificate that signed it, to `dbx`.
+
+The build writes the same overlay as `gen_uefi_keys_dts.sh` of the L4T kit, byte for byte, for the same inputs. No key update has been applied on a device yet.
 
 Production devices
 ------------------
@@ -163,7 +176,7 @@ Limitations and open points
 
 - **Not validated on a Jetson**, in particular:
   - the L4TLauncher change (`0002-L4TLauncher-boot-signed-UKIs-in-the-Torizon-boot-mode.patch`) builds, but has not booted yet;
-  - `UefiDefaultSecurityKeys.dts` has the same nodes and properties as the one `gen_uefi_keys_dts.sh` of the L4T kit (R39.2.1) writes, and its key lists are well-formed EFI signature lists with the three certificates. The firmware has not read it on a device yet.
+  - `UefiDefaultSecurityKeys.dtbo` is byte for byte what `gen_uefi_keys_dts.sh` of the L4T kit (R39.2.1) writes for the same certificates. The firmware has not read it on a device yet.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
@@ -172,7 +185,7 @@ Limitations and open points
 - **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
-- **UEFI key updates over the air** (db/dbx), as the x86 support does with Torizon subsystem updates, are not supported yet.
+- **UEFI key updates**: the build puts signed KEK, `db` and `dbx` updates in the capsule (see "Changing the enrolled keys"), but none has been applied on a device, and Torizon OS updates do not deliver capsules.
 - **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.
 - Only the Jetson Orin Nano is covered. Thor (T264) uses other boot chain keys.
