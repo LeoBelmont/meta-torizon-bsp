@@ -129,6 +129,12 @@ TEGRA_SECBOOT_UEFI_MENU ?= "1"
 # tegra-secboot-check, to check on the device that it booted as intended
 IMAGE_INSTALL:append = " tegra-secboot-check"
 
+# Set to "1" to install NVIDIA's sample trusted application (hwkey-agent)
+# and its client, nvhwkey-app: a trusted application signed with
+# TEGRA_OPTEE_TA_SIGN_KEY to test that OP-TEE loads it. For test images.
+TEGRA_SECBOOT_TEST_TA ?= "0"
+IMAGE_INSTALL:append = "${@' optee-nvsamples-hwkey-agent' if d.getVar('TEGRA_SECBOOT_TEST_TA') == '1' else ''}"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"

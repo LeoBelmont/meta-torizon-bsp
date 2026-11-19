@@ -110,6 +110,8 @@ OP-TEE trusted applications
 
 OP-TEE only loads trusted applications signed with `optee/ta_sign_key.pem`. The ones that meta-tegra builds are signed with it by the build. Build other trusted applications with the same `TA_SIGN_KEY`. Torizon OS installs none by default.
 
+`TEGRA_SECBOOT_TEST_TA = "1"` installs NVIDIA's sample trusted application (`hwkey-agent`) and its client (`nvhwkey-app`), to test on a device that OP-TEE loads a trusted application signed with the key. It is for test images, and has not been built or run yet.
+
 When the owner of the trusted applications signs them elsewhere and keeps the private key, set `TEGRA_OPTEE_TA_PUBLIC_KEY` to the public key (PEM). OP-TEE then verifies trusted applications with that key, and the ones this build signs with `optee/ta_sign_key.pem` do not load.
 
 Firmware update capsules
