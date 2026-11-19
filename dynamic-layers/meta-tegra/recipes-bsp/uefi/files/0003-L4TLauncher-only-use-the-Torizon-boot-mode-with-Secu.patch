@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Date: Thu, 19 Nov 2026 14:24:43 -0300
+Subject: [PATCH] L4TLauncher: only use the Torizon boot mode with Secure Boot
+
+L4TLauncher takes its boot mode from the L4TDefaultBootMode variable
+and from "bootmode=" in its load options. Both can be written from the
+running system, and the modes other than the Torizon one boot the
+kernel partition or the recovery partition: Android boot images that
+only need a signature that verifies against db. The image that
+initrd-flash boots is one, and it gives access to the storage of the
+device over USB.
+
+With UEFI Secure Boot enabled, use the Torizon boot mode whatever the
+variable and the load options say, so that the only thing booted is a
+signed UKI with a root filesystem that the initramfs verifies.
+
+The boot over USB in recovery mode (RCM) does not go through the boot
+mode and is not changed.
+
+Upstream-Status: Inappropriate [Torizon specific]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+ .../Application/L4TLauncher/L4TLauncher.c     | 23 +++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+index b204617..4f92d19 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+@@ -2127,6 +2127,29 @@ ProcessBootParams (
+     }
+   }
+ 
++  //
++  // Torizon: with UEFI Secure Boot enabled, only the Torizon boot mode boots
++  // a system that is verified. The other modes boot the kernel or the
++  // recovery partition, and both the L4TDefaultBootMode variable and the
++  // load options that select them can be written from the running system.
++  //
++  if (IsSecureBootEnabled () && (BootParams->BootMode != NVIDIA_L4T_BOOTMODE_TORIZON)) {
++    ErrorPrint (L"%a: Secure Boot is enabled, using the Torizon boot mode\r\n", __FUNCTION__);
++    BootParams->BootMode = NVIDIA_L4T_BOOTMODE_TORIZON;
++    DataSize             = sizeof (BootParams->TorizonBootFlags);
++    Status               = gRT->GetVariable (
++                                  TORIZON_BOOTFLAGS_VARIABLE_NAME,
++                                  &gNVIDIAPublicVariableGuid,
++                                  NULL,
++                                  &DataSize,
++                                  &BootParams->TorizonBootFlags
++                                  );
++    if (EFI_ERROR (Status)) {
++      ErrorPrint (L"Failed to read boot flags (err %r)\r\n", Status);
++      BootParams->TorizonBootFlags = 0;
++    }
++  }
++
+   // Find valid Rootfs Chain. If not, select recovery kernel
+   Status = ValidateRootfsStatus (BootParams);
+   if (EFI_ERROR (Status)) {
