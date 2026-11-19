@@ -21,6 +21,8 @@ SRC_URI:append:tegra-signed = "${@'' if d.getVar('TEGRA_SECBOOT_UEFI_MENU') != '
 # BinToPcd.py --xdr writes: the length of the certificate (DER) as 32 bits
 # big endian, then the certificate, padded to a multiple of 4 bytes. The
 # directory is in PACKAGES_PATH, where the platform description looks for it.
+# Written before do_compile: do_configure empties the build directory after
+# its own prefuncs have run.
 python torizon_fmp_certificates() {
     import ssl
 
@@ -35,7 +37,7 @@ python torizon_fmp_certificates() {
 }
 TORIZON_FMP_PREFUNCS = ""
 TORIZON_FMP_PREFUNCS:tegra-signed = "torizon_fmp_certificates"
-do_configure[prefuncs] += "${TORIZON_FMP_PREFUNCS}"
+do_compile[prefuncs] += "${TORIZON_FMP_PREFUNCS}"
 TORIZON_FMP_CHECKSUMS = ""
 TORIZON_FMP_CHECKSUMS:tegra-signed = "${UEFI_CAPSULE_TRUSTED_PUBLIC_CERT}:True"
-do_configure[file-checksums] += "${TORIZON_FMP_CHECKSUMS}"
+do_compile[file-checksums] += "${TORIZON_FMP_CHECKSUMS}"
