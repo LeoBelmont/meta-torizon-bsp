@@ -227,6 +227,17 @@ TEGRA_SECBOOT_BOOTCHAIN_SBK ?= "0"
 TEGRA_SIGNING_PKC = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/pkc.pem' if d.getVar('TEGRA_SECBOOT_BOOTCHAIN') == '1' else ''}"
 TEGRA_SIGNING_SBK = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/sbk.key' if d.getVar('TEGRA_SECBOOT_BOOTCHAIN') == '1' and d.getVar('TEGRA_SECBOOT_BOOTCHAIN_SBK') == '1' else ''}"
 
+# The EKB (encrypted key blob) that OP-TEE reads its keys from. Set to "1"
+# for devices with the OemK1 key fused: meta-tegra then builds the EKB with
+# that key, and puts the key that authenticates the UEFI variables and the
+# disk encryption key of the key set in it. Off by default: a device without
+# OemK1 fused cannot read such an EKB, and one with it fused cannot read the
+# EKB of the L4T kit that is used otherwise.
+TEGRA_SECBOOT_EKB ?= "0"
+TEGRA_EKB_OEM_K1 = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/oem_k1.key' if d.getVar('TEGRA_SECBOOT_EKB') == '1' else ''}"
+TEGRA_EKB_AUTH = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/ekb_auth.key' if d.getVar('TEGRA_SECBOOT_EKB') == '1' else ''}"
+TEGRA_EKB_SYM2 = "${@'${TEGRA_SECBOOT_KEYDIR}/bootchain/ekb_sym2.key' if d.getVar('TEGRA_SECBOOT_EKB') == '1' else ''}"
+
 python tegra_torizon_signed_check_keys() {
     import os
 
@@ -243,6 +254,10 @@ python tegra_torizon_signed_check_keys() {
     ]
     if d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'):
         keys.append(d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'))
+    # The keys for fused devices, when the build is told to use them
+    for var in ('TEGRA_SIGNING_PKC', 'TEGRA_SIGNING_SBK', 'TEGRA_EKB_OEM_K1', 'TEGRA_EKB_AUTH', 'TEGRA_EKB_SYM2'):
+        if d.getVar(var):
+            keys.append(d.getVar(var))
     secver = d.getVar('TEGRA_SECBOOT_SECURITY_VERSION') or ''
     if not secver.isdigit() or int(secver) > 0xffffffff:
         bb.fatal("torizon-signed: TEGRA_SECBOOT_SECURITY_VERSION must be a whole number "
