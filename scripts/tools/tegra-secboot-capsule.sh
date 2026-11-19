@@ -29,10 +29,27 @@ EFI_GLOBAL=8be4df61-93ca-11d2-aa0d-00e098032b8c
 NVIDIA_GUID=781e084c-a330-417c-b678-38e696380cb9
 DEFAULT_CAPSULE=/usr/share/tegra-uefi-capsules/tegra-bl.cap
 STATE_DIR="${TEGRA_SECBOOT_STATE_DIR:-/var/lib/tegra-secboot}"
-ESP_DEV=/dev/disk/by-partlabel/esp
+ESP_LABEL=esp
 ESP_FILE=EFI/UpdateCapsule/TEGRA_BL.Cap
 
 die() { echo "tegra-secboot-capsule: $*" >&2; exit 1; }
+
+# The EFI system partition of the disk the system runs from: the partition
+# labelled "esp" there. Another disk that is attached may have one too, and
+# the firmware only looks at the one of the boot device.
+esp_device() {
+	root="$(findmnt -n -o SOURCE /sysroot 2>/dev/null || findmnt -n -o SOURCE /)"
+	root="${root%%\[*}"
+	disk="$(lsblk -n -o PKNAME "$root" 2>/dev/null | head -n 1)"
+	[ -n "$disk" ] || return 1
+	lsblk -n -r -o NAME,PARTLABEL "/dev/$disk" 2>/dev/null |
+		while read -r name label; do
+			if [ "$label" = "$ESP_LABEL" ]; then
+				echo "/dev/$name"
+				break
+			fi
+		done
+}
 
 # efi_ascii NAME: an ASCII variable of the NVIDIA GUID, as text
 efi_ascii() {
@@ -79,12 +96,13 @@ install_capsule() {
 		die "the TegraPlatformSpec variable is not set: the firmware would refuse the capsule (see \"status\")"
 
 	# The EFI system partition: where it is mounted already, or mounted here
-	esp="$(findmnt -n -o TARGET --source "$(readlink -f "$ESP_DEV")" 2>/dev/null | head -n 1)"
+	esp_dev="$(esp_device)"
+	[ -b "$esp_dev" ] || die "no partition labelled \"$ESP_LABEL\" on the disk the system runs from"
+	esp="$(findmnt -n -o TARGET --source "$esp_dev" 2>/dev/null | head -n 1)"
 	mounted=""
 	if [ -z "$esp" ]; then
-		[ -b "$ESP_DEV" ] || die "no EFI system partition at $ESP_DEV"
 		esp="$(mktemp -d)" || die "cannot create a mount point"
-		mount "$ESP_DEV" "$esp" || { rmdir "$esp"; die "cannot mount $ESP_DEV"; }
+		mount "$esp_dev" "$esp" || { rmdir "$esp"; die "cannot mount $esp_dev"; }
 		mounted="1"
 	fi
 	rc=0
