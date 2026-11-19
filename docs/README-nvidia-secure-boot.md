@@ -217,16 +217,22 @@ And with the image built from d733eba:
 - `setup-nv-boot-control` sets the platform spec variables at the first boot, and `tegra-secboot-capsule install`, without a file, installs the capsule of the image (`TEGRA_SECBOOT_CAPSULE_IN_IMAGE`);
 - with `L4TDefaultBootMode` set to the kernel partition mode from the running system, L4TLauncher prints "Secure Boot is enabled, using the Torizon boot mode" and boots the UKI.
 
-Still to be verified on a Jetson: the update client (the updates above were deployed by hand), the firmware built with `TEGRA_SECBOOT_UEFI_MENU = "0"`, the serial console and SSH settings, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
+And with that image built with `TEGRA_SECBOOT_UEFI_MENU = "0"` and `TEGRA_SECBOOT_SERIAL_CONSOLE = "0"`:
+
+- the firmware does not offer its setup menu, boot menu or shell, and boots the UKI;
+- the kernel prints nothing on the serial console and there is no login on it; the boot firmware and L4TLauncher still print there;
+- when L4TLauncher refuses a changed boot image, the firmware does not try the network, and stops with "Unable to boot, system will halt".
+
+Still to be verified on a Jetson: the update client (the updates above were deployed by hand), `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
 
 - **Flashing is not restricted without fused boot chain keys**: see "Build". Disabling the recovery path for production devices needs the fuses.
-- **Other boot options after a failed boot**: when L4TLauncher refuses the boot image, the firmware tries its remaining boot options (network boot, and the shell if it is built in). Secure Boot still checks what they load. `TEGRA_SECBOOT_UEFI_MENU = "0"` leaves them out of the firmware.
+- **Other boot options after a failed boot**: when L4TLauncher refuses the boot image, the firmware of a default build tries its remaining boot options (network boot, and the shell). Secure Boot still checks what they load. With `TEGRA_SECBOOT_UEFI_MENU = "0"` they are not in the firmware, and it halts.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Confirmed on an Orin Nano: `bl_prof_dataptr` and `bl_prof_ro_ptr` are on the command line of an unsigned image and not on that of a signed one.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and debugfs. On an Orin Nano this stops the debugfs writes of `nvpower.sh`; `nvpmodel` and `nvfancontrol` work. Check the other NVIDIA tools in use (`jetson_clocks`, ...).
-- **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
+- **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which was built and booted on an Orin Nano (see "Test status"). Whether the menu of a default build refuses to turn Secure Boot off once it is enabled has not been tried.
 - **Capsules**: Torizon OS updates do not deliver or install them: see "Firmware update capsules".
 - **The kernel started on its own**: before the forced command line (see "Chain of trust"), the signed kernel image started from the UEFI shell with `initrd=` and `rdinit=` of an attacker's choice gave a root shell with Secure Boot enabled; this was reproduced in QEMU with the image of 2026-11-19. The kernel with the fix is built and boots on an Orin Nano; the test itself is still to be repeated on that image. With Secure Boot, L4TLauncher still starts any image signed with db that `uEnv.txt` points to, not only a UKI.
 - **Boot mode of L4TLauncher**: the `L4TDefaultBootMode` variable can be written from the running system, and `bootmode=bootimg` in the load options selects the kernel partition too, which can be rewritten with any Android boot image signed with db; the flashing image is one. With Secure Boot enabled, L4TLauncher uses the Torizon boot mode whatever they say (`0003-L4TLauncher-only-use-the-Torizon-boot-mode-with-Secu.patch`): confirmed on an Orin Nano for the variable, not tried with the load options.
