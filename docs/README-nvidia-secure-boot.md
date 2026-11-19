@@ -123,7 +123,17 @@ Firmware update capsules
 
 `bitbake tegra-uefi-capsules` builds `tegra-bl.cap`, the capsule that updates the boot chain, signed with `capsule/signer.pem`. The UEFI firmware of a signed build only accepts capsules that chain to `capsule/root.crt`. The firmware a device runs decides which certificate is trusted: a device flashed before this change still trusts the EDK2 test certificate until its firmware is replaced.
 
-Torizon OS does not deliver capsules with its updates yet. To install one by hand, follow the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation.
+The firmware selects the images of a capsule for the board it runs on, which it reads from the `TegraPlatformSpec` and `TegraPlatformCompatSpec` variables. meta-tegra's `setup-nv-boot-control` service sets them at boot; Torizon OS leaves it out of unsigned images, and signed images install it. Without the variables the firmware refuses every capsule, with the last attempt status 0x1807.
+
+Torizon OS does not deliver capsules with its updates yet. To install one on a device, as root:
+
+```
+# tegra-secboot-capsule install /path/to/tegra-bl.cap
+# reboot
+# tegra-secboot-capsule status
+```
+
+`install` copies the capsule to the EFI system partition and sets `OsIndications`, as the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation does. After the reboot, `status` shows "Capsule update status: 1" and the other boot chain as the current one. `TEGRA_SECBOOT_CAPSULE_IN_IMAGE = "1"` puts the capsule of the build in the image, in `/usr/share/tegra-uefi-capsules`, where `install` takes it from when no file is given: an update of the operating system then brings the capsule, and installing it stays a separate step. A boot firmware update is not undone when the operating system rolls back.
 
 Changing the enrolled keys
 --------------------------
@@ -142,6 +152,8 @@ Production devices
 ------------------
 
 `TEGRA_SECBOOT_UEFI_MENU = "0"` builds the UEFI firmware without its setup menu, boot menu, shell and network boot (HTTP, PXE), and with no boot delay. Leave it at its default while developing: the menu shows the Secure Boot state.
+
+Two more settings are for production devices, and are also on by default: `TEGRA_SECBOOT_SERIAL_CONSOLE = "0"` takes the serial console off the kernel command line and disables the login on it (the boot firmware still prints there), and `TEGRA_SECBOOT_SSH = "0"` keeps the SSH server from starting. Signed images set `kernel.kptr_restrict = 2`.
 
 The firmware of the development kits is already configured (`CONFIG_SECURITY_DISABLE_PHYSICAL_PRESENCE_POST_SECUREBOOT`) to refuse changes to the Secure Boot state and keys from the menu once Secure Boot is enabled.
 
@@ -184,7 +196,15 @@ Verified on a Jetson Orin Nano Developer Kit with NVMe (2026-11-19, signed image
 - `nvpmodel`, `nvfancontrol`, the GPU modules and device nodes, and `/dev/tee0` are there with lockdown. Lockdown refuses the debugfs writes of `nvpower.sh` (host1x load monitoring and one clock rate), which are then not applied;
 - a device with enrolled keys is reflashed with the signed package, and with the unsigned one (see "Build").
 
-Still to be verified on a Jetson: updates and rollback, capsules, trusted applications, the firmware built with `TEGRA_SECBOOT_UEFI_MENU = "0"`, the forced kernel command line, and everything that needs the boot chain keys fused.
+Also verified on that Jetson, with the image built from b55ddf9 deployed as an update over the first one and then flashed:
+
+- an update: the new commit, deployed with `ostree admin deploy` and with `upgrade_available` set, is booted by L4TLauncher, and the flag is cleared after the boot;
+- a failed update: with the boot image of the pending deployment changed, L4TLauncher refuses it and resets three times, then sets the rollback flag ("The boot counter has expired, setting the rollback flag") and boots the other deployment;
+- the kernel built with the forced command line boots, in the UKI and in the flashing image. The flashing image is then quiet on the serial console;
+- OP-TEE loads the sample trusted application signed with the key of the key set (`TEGRA_SECBOOT_TEST_TA`), and refuses a copy of it with one byte changed;
+- a capsule: refused with status 0x1807 while the platform spec variables are not set; with them, `tegra-secboot-capsule install` and a reboot write the other boot chain, the device boots from it with Secure Boot still enabled, and a capsule with one byte changed is refused.
+
+Still to be verified on a Jetson: the update client (the updates above were deployed by hand), the firmware built with `TEGRA_SECBOOT_UEFI_MENU = "0"`, the serial console and SSH settings, `setup-nv-boot-control` in the image (the variables were set by hand for the capsule test), L4TLauncher ignoring other boot modes, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
@@ -194,11 +214,11 @@ Limitations and open points
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Confirmed on an Orin Nano: `bl_prof_dataptr` and `bl_prof_ro_ptr` are on the command line of an unsigned image and not on that of a signed one.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and debugfs. On an Orin Nano this stops the debugfs writes of `nvpower.sh`; `nvpmodel` and `nvfancontrol` work. Check the other NVIDIA tools in use (`jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
-- **Capsules**: the capsule builds and verifies on the host, but none has been installed on a device, and Torizon OS updates do not deliver them.
-- **The kernel started on its own**: before the forced command line (see "Chain of trust"), the signed kernel image started from the UEFI shell with `initrd=` and `rdinit=` of an attacker's choice gave a root shell with Secure Boot enabled; this was reproduced in QEMU with the image of 2026-11-19. The fix is not built yet, and the test is to be repeated on the next image. With Secure Boot, L4TLauncher still starts any image signed with db that `uEnv.txt` points to, not only a UKI.
-- **Boot mode of L4TLauncher**: the `L4TDefaultBootMode` variable can be written from the running system, and `bootmode=bootimg` in the load options selects the kernel partition too. The image there is one that stops, but the partition can be rewritten with any Android boot image signed with db, and the flashing image is one. To be closed in L4TLauncher.
+- **Capsules**: Torizon OS updates do not deliver or install them: see "Firmware update capsules". A capsule has been installed on an Orin Nano, with the platform spec variables set by hand; `setup-nv-boot-control` in the image is not tested yet.
+- **The kernel started on its own**: before the forced command line (see "Chain of trust"), the signed kernel image started from the UEFI shell with `initrd=` and `rdinit=` of an attacker's choice gave a root shell with Secure Boot enabled; this was reproduced in QEMU with the image of 2026-11-19. The kernel with the fix is built and boots on an Orin Nano; the test itself is still to be repeated on that image. With Secure Boot, L4TLauncher still starts any image signed with db that `uEnv.txt` points to, not only a UKI.
+- **Boot mode of L4TLauncher**: the `L4TDefaultBootMode` variable can be written from the running system, and `bootmode=bootimg` in the load options selects the kernel partition too, which can be rewritten with any Android boot image signed with db; the flashing image is one. With Secure Boot enabled, L4TLauncher now uses the Torizon boot mode whatever they say (`0003-L4TLauncher-only-use-the-Torizon-boot-mode-with-Secu.patch`). Not built or tested yet.
 - **Found by review of the L4TLauncher change, not fixed yet**: `uki=1` applies to both entries of `uEnv.txt`, so with Secure Boot off a rollback from the first UKI deployment to a deployment without one does not boot; a failure to set `TorizonBootArgs` is only logged; an EKB with the UEFI payload encryption key makes L4TLauncher try to decrypt the UKI, which then does not load.
-- **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
+- **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. Confirmed on an Orin Nano (see "Test status").
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
 - **UEFI key updates**: the build puts signed KEK, `db` and `dbx` updates in the capsule (see "Changing the enrolled keys"), but none has been applied on a device, and Torizon OS updates do not deliver capsules.
