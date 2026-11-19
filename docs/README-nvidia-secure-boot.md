@@ -139,7 +139,7 @@ The build writes the same overlay as `gen_uefi_keys_dts.sh` of the L4T kit, byte
 Production devices
 ------------------
 
-`TEGRA_SECBOOT_UEFI_MENU = "0"` builds the UEFI firmware without its setup menu, boot menu and shell, and with no boot delay. Leave it at its default while developing: the menu shows the Secure Boot state.
+`TEGRA_SECBOOT_UEFI_MENU = "0"` builds the UEFI firmware without its setup menu, boot menu, shell and network boot (HTTP, PXE), and with no boot delay. Leave it at its default while developing: the menu shows the Secure Boot state.
 
 The firmware of the development kits is already configured (`CONFIG_SECURITY_DISABLE_PHYSICAL_PRESENCE_POST_SECUREBOOT`) to refuse changes to the Secure Boot state and keys from the menu once Secure Boot is enabled.
 
