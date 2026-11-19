@@ -80,6 +80,14 @@ This makes `torizon-signed` inherit `tegra-torizon-signed` (meta-torizon-bsp) in
 
 Keep the key directory. Once the keys are enrolled, the device only boots images signed with them.
 
+To check, on the build or flashing host, that a package is signed with a key set before flashing it:
+
+```
+$ scripts/tools/tegra-secboot-verify-package.py [--capsule tegra-bl.cap] <package>.tegraflash-tar.zst /path/to/keydir
+```
+
+It checks the certificates in the key overlay, the signatures of the boot loader and of the boot image, that the boot image is a UKI, the signatures of the kernel modules, the image of the kernel partition and the trusted application key in OP-TEE, and exits with 1 when one of them fails. It only needs the public parts of the key directory.
+
 A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. NVIDIA documents that Secure Boot enabled at flashing time, as here, cannot be disabled unless the device is flashed again.
 
 UEFI Secure Boot does not protect the flashing path. `initrd-flash` boots its image over USB with a minimal firmware that does not enforce Secure Boot (its kernel logs "Secure boot disabled"), so on a device whose boot chain keys are not fused, any package can be flashed, signed or not, and the flash removes the enrolled keys. Tested on an Orin Nano: an unsigned package flashed over a device with enrolled keys, which then booted with Secure Boot off. Only the fused boot chain keys restrict what the recovery mode accepts.
