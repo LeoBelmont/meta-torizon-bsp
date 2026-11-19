@@ -78,9 +78,11 @@ This makes `torizon-signed` inherit `tegra-torizon-signed` (meta-torizon-bsp) in
 - builds OP-TEE with the trusted application key of the key set (`TEGRA_OPTEE_TA_SIGN_KEY`), instead of the default OP-TEE key, whose private part is in the OP-TEE sources;
 - builds the UEFI firmware with the capsule root certificate of the key set, instead of the EDK2 test certificate that meta-tegra builds in.
 
-Keep the key directory. Once the keys are enrolled, the device only boots images signed with them, and that includes the flashing image that `initrd-flash` boots over USB: L4TLauncher verifies it when Secure Boot is enabled. So a device with enrolled keys is reflashed with a package signed with the same keys.
+Keep the key directory. Once the keys are enrolled, the device only boots images signed with them.
 
-A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. NVIDIA documents that Secure Boot enabled at flashing time, as here, cannot be disabled unless the device is flashed again. Whether a package that is unsigned, or signed with other keys, can be flashed while Secure Boot is enabled is to be confirmed on hardware; rewriting the QSPI flash with NVIDIA's `flash.sh` clears the keys in any case.
+A full flash erases the whole QSPI flash, UEFI variables included, so the device comes back in setup mode and enrolls the keys of the package just flashed at its next boot. NVIDIA documents that Secure Boot enabled at flashing time, as here, cannot be disabled unless the device is flashed again.
+
+UEFI Secure Boot does not protect the flashing path. `initrd-flash` boots its image over USB with a minimal firmware that does not enforce Secure Boot (its kernel logs "Secure boot disabled"), so on a device whose boot chain keys are not fused, any package can be flashed, signed or not, and the flash removes the enrolled keys. Tested on an Orin Nano: an unsigned package flashed over a device with enrolled keys, which then booted with Secure Boot off. Only the fused boot chain keys restrict what the recovery mode accepts.
 
 The UEFI firmware only creates the default key variables when they do not exist. An update of the firmware alone (e.g. a capsule) therefore does not change the enrolled keys.
 
@@ -154,7 +156,7 @@ UEFI Secure Boot alone does not protect the boot chain before UEFI: on a device 
 Key sets
 --------
 
-A key set is one directory, as created by `tegra-secboot-genkeys.sh`: use a separate one for development, for test units, and for production, and select it with `TEGRA_SECBOOT_KEYDIR` (and `CFS_SIGN_KEYDIR` for the composefs keys). A device enrolled with one set only boots, and is only reflashed with, images signed with that set. Production keys are created and kept by whoever owns the product; the development keys this script creates are for engineering units only.
+A key set is one directory, as created by `tegra-secboot-genkeys.sh`: use a separate one for development, for test units, and for production, and select it with `TEGRA_SECBOOT_KEYDIR` (and `CFS_SIGN_KEYDIR` for the composefs keys). A device enrolled with one set only boots images signed with that set; what it can be reflashed with is decided by the fused boot chain keys, not by the enrolled ones. Production keys are created and kept by whoever owns the product; the development keys this script creates are for engineering units only.
 
 Test status
 -----------
@@ -171,16 +173,26 @@ Verified on the built images, and by booting the signed image in QEMU (`virt` ma
 
 `tegra-uefi-capsules` builds the capsule with the firmware and OP-TEE of the image. Its signature has the signing and intermediate certificates of the key set, and verifies with the EDK2 capsule tool against the root certificate of the key set, not against the EDK2 test certificate. The built firmware holds that root certificate and no longer the test one, and the built OP-TEE holds the trusted application key of the key set. `TEGRA_SECBOOT_UEFI_MENU` was checked with the configuration tool of the firmware, not built.
 
-Still to be verified on a Jetson: the enrollment of the keys by the NVIDIA firmware, L4TLauncher booting the UKI (and not falling back), the NVIDIA drivers and tools with lockdown, updates and rollback, and reflashing with Secure Boot enabled.
+Verified on a Jetson Orin Nano Developer Kit with NVMe (2026-11-19, signed image built from c5cd803, development keys, boot chain keys not fused):
+
+- the NVIDIA firmware enrolls PK, KEK and db from the flash package at the first boot, and Secure Boot is enforced from that boot on;
+- L4TLauncher boots the signed UKI in the Torizon boot mode, on the first boot and after a reboot, and `tegra-secboot-check.sh` passes;
+- the kernel command line is the one of the UKI: the arguments the firmware appends on an unsigned image (`bl_prof_dataptr`, `bl_prof_ro_ptr`) are not there;
+- a boot image with one byte changed is refused ("Access Denied"), and L4TLauncher does not fall back to the kernel partition. The firmware then goes on to its other boot options (HTTP and PXE boot), which `TEGRA_SECBOOT_UEFI_MENU = "0"` removes;
+- the boot image has fs-verity enabled, so it cannot be changed in place, only replaced;
+- an unsigned module is refused, and a file changed behind the filesystem gives an I/O error ("FILE CORRUPTED");
+- `nvpmodel`, `nvfancontrol`, the GPU modules and device nodes, and `/dev/tee0` are there with lockdown. Lockdown refuses the debugfs writes of `nvpower.sh` (host1x load monitoring and one clock rate), which are then not applied;
+- a device with enrolled keys is reflashed with the signed package, and with the unsigned one (see "Build").
+
+Still to be verified on a Jetson: updates and rollback, capsules, trusted applications, the firmware built with `TEGRA_SECBOOT_UEFI_MENU = "0"`, the forced kernel command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
 
-- **Not validated on a Jetson**, in particular:
-  - the L4TLauncher change (`0002-L4TLauncher-boot-signed-UKIs-in-the-Torizon-boot-mode.patch`) builds, but has not booted yet;
-  - `UefiDefaultSecurityKeys.dtbo` is byte for byte what `gen_uefi_keys_dts.sh` of the L4T kit (R39.2.1) writes for the same certificates. The firmware has not read it on a device yet.
-- **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
-- **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
+- **Flashing is not restricted without fused boot chain keys**: see "Build". Disabling the recovery path for production devices needs the fuses.
+- **Other boot options after a failed boot**: when L4TLauncher refuses the boot image, the firmware tries its remaining boot options (network boot, and the shell if it is built in). Secure Boot still checks what they load. `TEGRA_SECBOOT_UEFI_MENU = "0"` leaves them out of the firmware.
+- **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Confirmed on an Orin Nano: `bl_prof_dataptr` and `bl_prof_ro_ptr` are on the command line of an unsigned image and not on that of a signed one.
+- **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and debugfs. On an Orin Nano this stops the debugfs writes of `nvpower.sh`; `nvpmodel` and `nvfancontrol` work. Check the other NVIDIA tools in use (`jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
 - **Capsules**: the capsule builds and verifies on the host, but none has been installed on a device, and Torizon OS updates do not deliver them.
 - **The kernel started on its own**: before the forced command line (see "Chain of trust"), the signed kernel image started from the UEFI shell with `initrd=` and `rdinit=` of an attacker's choice gave a root shell with Secure Boot enabled; this was reproduced in QEMU with the image of 2026-11-19. The fix is not built yet, and the test is to be repeated on the next image. With Secure Boot, L4TLauncher still starts any image signed with db that `uEnv.txt` points to, not only a UKI.
