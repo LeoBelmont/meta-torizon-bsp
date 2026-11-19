@@ -263,6 +263,14 @@ And with the image built from 4f6da1e, with `TEGRA_SECBOOT_CAPSULE_AUTO`, `TEGRA
 - an earlier image, with the security version 0, deployed as an update: L4TLauncher refuses it ("security version 0 of the boot image is below the minimum 1"), resets, and after the boot counter has expired boots the image that was running;
 - the devicetree of the deployment and its signature are in the boot directory, and the kernel runs with it. With one byte of it changed, L4TLauncher reports that it failed the signature verification and the boot stops.
 
+And with the image built from e8e8d49, which has the hardening of L4TLauncher from a review:
+
+- with the root filesystem slot marked unbootable from the running system, L4TLauncher prints "Secure Boot is enabled, staying in the Torizon boot mode" and boots the UKI;
+- with the first entry of `uEnv.txt` naming another program signed with db (L4TLauncher itself), it refuses it ("the boot image is not a UKI") and, the update being marked as pending, boots the second entry after the boot counter has expired, with the devicetree of that entry;
+- `TorizonSecurityVersionMin` created from the running system under an earlier L4TLauncher, with runtime access and the highest value: the new L4TLauncher ignores and deletes it, creates its own and boots. Creating it again from the running system then fails ("Invalid argument").
+
+`tegra-secboot-flash.sh` flashed that device several times without any help.
+
 Still to be verified on a Jetson: the update client (the updates above were deployed by hand), a capsule that the timer installs after a real update, `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
@@ -287,7 +295,7 @@ Limitations and open points
 - **Other signed images of a build**: a signed build still makes and signs the image of meta-tegra for the kernel partition (`tegra-minimal-initramfs`, which boots the root filesystem without verifying it) and the flashing image. L4TLauncher of this build boots neither, but see the point above.
 - **What the security version covers**: the UKI, not the root filesystem it mounts. composefs accepts every deployment signed with the composefs key, so a UKI at the minimum boots an older deployment that someone writes to the storage, with its own kernel and initramfs. Use a new composefs key (`CFS_SIGN_KEYDIR`) for a release that must lock out the root filesystems before it.
 - **Which devicetree**: with `TEGRA_SECBOOT_KERNEL_DTB`, any devicetree signed with db verifies, from any release, and without one named in `uEnv.txt` the one of the boot chain is used.
-- **Hardening of L4TLauncher from a review** (`0006-L4TLauncher-close-ways-around-the-Torizon-UKI-boot-ch.patch`): variables that the operating system could create before L4TLauncher did, the recovery boot mode, boot images that are not UKIs. It compiles against the EDK2 headers and its rules pass tests on the build host; not built into the firmware or run on a device yet.
+- **Hardening of L4TLauncher from a review** (`0006-L4TLauncher-close-ways-around-the-Torizon-UKI-boot-ch.patch`): variables that the operating system could create before L4TLauncher did, the recovery boot mode, boot images that are not UKIs. Tested on an Orin Nano: see "Test status". A `TorizonBootArgs` variable created by the operating system was only tested on the build host.
 - **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.
 - Only the Jetson Orin Nano is covered. Thor (T264) uses other boot chain keys.
