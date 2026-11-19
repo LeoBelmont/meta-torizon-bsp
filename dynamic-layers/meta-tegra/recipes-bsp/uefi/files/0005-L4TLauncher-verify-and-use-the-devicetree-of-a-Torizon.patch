@@ -1,0 +1,77 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Date: Thu, 19 Nov 2026 16:45:22 -0300
+Subject: [PATCH] L4TLauncher: verify and use the devicetree of a Torizon UKI
+ boot
+
+A Torizon UKI boot ignored the devicetree that uEnv.txt names and left
+the one of the boot chain in place. That one is only verified on a
+device with the boot chain keys fused, and a devicetree change in an
+update of the operating system never reached the kernel.
+
+Use the devicetree of the deployment when uEnv.txt names one (fdtdir
+and fdtfile). It is read with OpenAndReadFileToBuffer(), as before the
+UKI boot: with Secure Boot enabled it needs a detached signature,
+<file>.sig, that verifies against db. Unlike the other boot modes, a
+UKI boot stops when the devicetree is missing or does not verify,
+instead of going on with the one of the boot chain.
+
+Without a devicetree named in uEnv.txt, the one of the boot chain is
+used, as before.
+
+Upstream-Status: Inappropriate [Torizon specific]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+ .../Application/L4TLauncher/L4TLauncher.c     | 32 ++++++++++++++++++-
+ 1 file changed, 31 insertions(+), 1 deletion(-)
+
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+index 8cf3a61..d48bc93 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+@@ -1770,6 +1770,28 @@ ProcessExtLinuxConfig (
+       UEnvBootArgs = NULL;
+     }
+ 
++    //
++    // A devicetree of the deployment replaces the one of the boot chain.
++    // With Secure Boot it needs a detached signature (<file>.sig) that
++    // verifies against db, and the boot stops when it does not verify.
++    // Without one named in uEnv.txt, the devicetree of the boot chain is
++    // used, as before.
++    //
++    if ((UEnvFDTDir != NULL) && (UEnvFDTFile != NULL)) {
++      UINTN  DtbPathLen = StrLen (UEnvFDTDir) + StrLen (UEnvFDTFile) + 2;
++
++      BootConfig->BootOptions[0].DtbPath = AllocatePool (DtbPathLen * sizeof (CHAR16));
++      if (BootConfig->BootOptions[0].DtbPath == NULL) {
++        ErrorPrint (L"%a: Failed to allocate the devicetree path\r\n", __FUNCTION__);
++        return EFI_OUT_OF_RESOURCES;
++      }
++
++      BootConfig->BootOptions[0].DtbPath[0] = 0;
++      StrCatS (BootConfig->BootOptions[0].DtbPath, DtbPathLen, UEnvFDTDir);
++      StrCatS (BootConfig->BootOptions[0].DtbPath, DtbPathLen, L"/");
++      StrCatS (BootConfig->BootOptions[0].DtbPath, DtbPathLen, UEnvFDTFile);
++    }
++
+     if (UEnvFDTDir != NULL) {
+       FreePool (UEnvFDTDir);
+       UEnvFDTDir = NULL;
+@@ -2015,7 +2037,15 @@ ExtLinuxBoot (
+                &FdtSize
+                );
+     if (EFI_ERROR (Status)) {
+-      ErrorPrint (L"%a: Failed to authenticate %s (%r)\r\n", __FUNCTION__, EXTLINUX_CONF_PATH, Status);
++      ErrorPrint (L"%a: Failed to authenticate %s (%r)\r\n", __FUNCTION__, BootOption->DtbPath, Status);
++      //
++      // A Torizon UKI boot does not go on with the devicetree of the boot
++      // chain when the one of the deployment is missing or does not verify.
++      //
++      if (mTorizonUkiBoot) {
++        goto Exit;
++      }
++
+       goto LoadKernel;
+     }
+ 
