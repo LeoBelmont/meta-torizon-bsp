@@ -95,6 +95,15 @@ ostree=/ostree/boot.1/torizon/<checksum>/0
 
 The last byte of `SecureBoot` is `01` with Secure Boot enabled.
 
+`scripts/tools/tegra-secboot-check.sh` runs these checks and the rest of the chain (the UKI boot, lockdown, module signatures, composefs), and reports the state of the services that depend on the NVIDIA hardware. Copy it to the device and run it as root:
+
+```
+$ scp meta-torizon-bsp/scripts/tools/tegra-secboot-check.sh torizon@<device>:/tmp/
+$ ssh -t torizon@<device> sudo sh /tmp/tegra-secboot-check.sh
+```
+
+Its exit status is 1 when a Secure Boot check fails.
+
 OP-TEE trusted applications
 ---------------------------
 
