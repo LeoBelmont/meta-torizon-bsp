@@ -19,6 +19,7 @@ EFI_GLOBAL=8be4df61-93ca-11d2-aa0d-00e098032b8c
 EFI_IMAGE_SECURITY=d719b2cb-3d3a-4596-a3bc-dad00e67656f
 TORIZON_GUID=42dcf640-982c-443e-a0af-f6eb12f881f5
 LOADER_GUID=4a67b082-0a4c-41cf-b6c7-440b29bb8c4f
+NVIDIA_GUID=781e084c-a330-417c-b678-38e696380cb9
 
 fails=0
 pass() { echo "PASS  $*"; }
@@ -132,10 +133,20 @@ else
 fi
 
 section "System"
+# systemd-networkd-wait-online.service is known to fail on Torizon OS 8
+# images, without consequence: it does not count
+known="systemd-networkd-wait-online.service"
+failed="$(systemctl --failed --no-legend --plain 2>/dev/null | while read -r unit rest; do echo "$unit"; done | grep -v -x -F "$known")"
 v="$(systemctl is-system-running 2>/dev/null)"
-if [ "$v" = "running" ]; then pass "systemd state: running"; else warn "systemd state: $v"; fi
-systemctl --failed --no-legend --plain 2>/dev/null | while read -r unit rest; do
-	[ -n "$unit" ] && echo "WARN  failed unit: $unit"
+if [ "$v" = "running" ]; then
+	pass "systemd state: running"
+elif [ "$v" = "degraded" ] && [ -z "$failed" ]; then
+	info "systemd state: degraded, only by $known (known, harmless)"
+else
+	warn "systemd state: $v"
+fi
+for unit in $failed; do
+	warn "failed unit: $unit"
 done
 for unit in docker.service aktualizr-torizon.service tee-supplicant.service nvpmodel.service nvfancontrol.service; do
 	v="$(systemctl is-active "$unit" 2>/dev/null)"
@@ -157,6 +168,16 @@ if [ "$root" = "1" ]; then
 fi
 if command -v fw_printenv >/dev/null 2>&1; then
 	info "update state: $(fw_printenv upgrade_available bootcount rollback 2>/dev/null | tr '\n' ' ')"
+fi
+# The firmware needs the platform spec to accept a capsule
+v="$(dd if="${EFIVARS}/TegraPlatformSpec-${NVIDIA_GUID}" bs=1 skip=4 2>/dev/null | tr -d '\000\r\n')"
+if [ -n "$v" ]; then
+	info "platform spec for capsules: $v"
+else
+	warn "TegraPlatformSpec is not set: the firmware refuses capsules (setup-nv-boot-control sets it)"
+fi
+if command -v nvbootctrl >/dev/null 2>&1; then
+	info "boot firmware: $(nvbootctrl dump-slots-info 2>/dev/null | grep -E "^(Capsule update status|Current bootloader slot)" | tr '\n' ' ')"
 fi
 
 echo
