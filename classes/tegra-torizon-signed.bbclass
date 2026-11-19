@@ -127,11 +127,26 @@ UEFI_CAPSULE_TRUSTED_PUBLIC_CERT ?= "${TEGRA_UEFI_CAPSULE_KEYDIR}/root.crt"
 # The capsule carries the image of the kernel partition
 TEGRA_UEFI_CAPSULE_SIGNING_EXTRA_DEPS:append = " tegra-secboot-halt-initramfs:do_image_complete"
 
-# Set to "0" to build the UEFI firmware without its setup menu, boot menu
-# and shell, for production devices.
+# The UEFI firmware selects the images of a capsule for the board, which it
+# reads from the TegraPlatformSpec and TegraPlatformCompatSpec variables.
+# meta-tegra sets them at boot with setup-nv-boot-control, which Torizon OS
+# leaves out of tegra-redundant-boot-base. Without them the firmware refuses
+# every capsule (last attempt status 0x1807).
+IMAGE_INSTALL:append = " setup-nv-boot-control-service util-linux-lsblk"
+
+# Set to "1" to put the capsule of the build in the image, for
+# tegra-secboot-capsule to install on the device, for instance after an
+# update of the operating system. Nothing installs it automatically.
+TEGRA_SECBOOT_CAPSULE_IN_IMAGE ?= "0"
+TEGRA_UEFI_CAPSULE_INSTALL_DIR ?= "${datadir}/tegra-uefi-capsules"
+IMAGE_INSTALL:append = "${@' tegra-uefi-capsules' if d.getVar('TEGRA_SECBOOT_CAPSULE_IN_IMAGE') == '1' else ''}"
+
+# Set to "0" to build the UEFI firmware without its setup menu, boot menu,
+# shell and network boot, for production devices.
 TEGRA_SECBOOT_UEFI_MENU ?= "1"
 
-# tegra-secboot-check, to check on the device that it booted as intended
+# tegra-secboot-check and tegra-secboot-capsule, to check on the device
+# that it booted as intended and to install capsules
 IMAGE_INSTALL:append = " tegra-secboot-check"
 
 # Set to "1" to install NVIDIA's sample trusted application (hwkey-agent)
