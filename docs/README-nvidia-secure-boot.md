@@ -33,7 +33,7 @@ composefs verifies the root filesystem in two ways. The composefs image of the d
 
 By default the kernel gets the devicetree of the boot chain, which is only verified on fused devices: without the boot chain keys fused, nothing checks the UEFI firmware image that carries it. An update of the operating system does not change that devicetree either.
 
-`TEGRA_SECBOOT_KERNEL_DTB = "1"` boots with the devicetree of the deployment instead, as unsigned images do. The build puts the devicetrees in the OSTree commit, each with a detached signature made with the db key, and L4TLauncher verifies the signature before it installs the devicetree for the kernel. A UKI boot stops when the devicetree that `uEnv.txt` names is missing or does not verify. Someone who removes the devicetree from `uEnv.txt` gets the one of the boot chain, not one of their own. Not built or tested on a device yet.
+`TEGRA_SECBOOT_KERNEL_DTB = "1"` boots with the devicetree of the deployment instead, as unsigned images do. The build puts the devicetrees in the OSTree commit, each with a detached signature made with the db key, and L4TLauncher verifies the signature before it installs the devicetree for the kernel. A UKI boot stops when the devicetree that `uEnv.txt` names is missing or does not verify. Someone who removes the devicetree from `uEnv.txt` gets the one of the boot chain, not one of their own. Tested on an Orin Nano: see "Test status".
 
 Keys
 ----
@@ -164,7 +164,7 @@ Raise the security version by hand, in the release that must not be undone, and 
 
 On a device whose boot chain keys are not fused, the minimum is as safe as the firmware variables are: someone who rewrites the QSPI flash resets it. NVIDIA's UEFI variable protection, which needs a key in the EKB, closes that on fused devices.
 
-Not built or tested on a device yet. The check itself passes a compile against the EDK2 headers and tests on the build host.
+Tested on an Orin Nano: see "Test status".
 
 Changing the enrolled keys
 --------------------------
@@ -246,9 +246,16 @@ And with that image built with `TEGRA_SECBOOT_UEFI_MENU = "0"` and `TEGRA_SECBOO
 - the kernel prints nothing on the serial console and there is no login on it; the boot firmware and L4TLauncher still print there;
 - when L4TLauncher refuses a changed boot image, the firmware does not try the network, and stops with "Unable to boot, system will halt".
 
-`tegra-secboot-capsule auto` was run by hand on that Jetson: it installs another capsule than the recorded one at the next reboot, waits while an update is pending, and does not try a capsule again that the firmware refused. Its timer is not built yet.
+`tegra-secboot-capsule auto` was run by hand on that Jetson: it installs another capsule than the recorded one at the next reboot, waits while an update is pending, and does not try a capsule again that the firmware refused.
 
-Still to be verified on a Jetson: the update client (the updates above were deployed by hand), `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
+And with the image built from 4f6da1e, with `TEGRA_SECBOOT_CAPSULE_AUTO`, `TEGRA_SECBOOT_KERNEL_DTB` and `TEGRA_SECBOOT_SECURITY_VERSION = "1"`:
+
+- the timer runs `tegra-secboot-capsule auto` two minutes after the boot, and it records the capsule of the image;
+- at the first boot L4TLauncher raises the minimum security version from 0 to 1. Writing the minimum from the running system fails ("Operation not permitted"), and it is still 1 after reboots;
+- an earlier image, with the security version 0, deployed as an update: L4TLauncher refuses it ("security version 0 of the boot image is below the minimum 1"), resets, and after the boot counter has expired boots the image that was running;
+- the devicetree of the deployment and its signature are in the boot directory, and the kernel runs with it. With one byte of it changed, L4TLauncher reports that it failed the signature verification and the boot stops.
+
+Still to be verified on a Jetson: the update client (the updates above were deployed by hand), a capsule that the timer installs after a real update, `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
@@ -266,8 +273,8 @@ Limitations and open points
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
 - **UEFI key updates**: the build puts signed KEK, `db` and `dbx` updates in the capsule (see "Changing the enrolled keys"), but none has been applied on a device, and Torizon OS updates do not deliver capsules.
-- **Devicetree of the deployment** (`TEGRA_SECBOOT_KERNEL_DTB`): not built or tested on a device yet. Devicetree overlays are not applied in a UKI boot.
-- **Anti-rollback limit**: see the section of that name. It covers the UKI, and through it the deployment that the UKI's initramfs accepts; it is not built or tested on a device yet. The boot firmware has its own limit, the lowest supported version of a capsule.
+- **Devicetree of the deployment** (`TEGRA_SECBOOT_KERNEL_DTB`): off by default. Devicetree overlays are not applied in a UKI boot.
+- **Anti-rollback limit**: see the section of that name. It covers the UKI, and through it the deployment that the UKI's initramfs accepts. The boot firmware has its own limit, the lowest supported version of a capsule.
 - **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.
 - Only the Jetson Orin Nano is covered. Thor (T264) uses other boot chain keys.
