@@ -9,8 +9,12 @@
 #                            UEFI Secure Boot keys; db signs L4TLauncher and
 #                            the UKI, PK and KEK are enrolled with it
 #   modsign/modsign_key.pem  kernel module signing key and certificate
+#   optee/ta_sign_key.pem    OP-TEE trusted application signing key
 #   bootchain/pkc.pem        with --bootchain: Tegra boot chain signing key
 #   bootchain/sbk.key        with --bootchain: Tegra boot chain encryption key
+#
+# Keys that exist are kept: run it again on a key directory to add the keys
+# that a newer version of the layer needs.
 #
 # The boot chain keys only take effect once fused in the SoC, which is
 # irreversible: see docs/README-nvidia-secure-boot.md before fusing.
@@ -38,22 +42,30 @@ done
 [ $# -eq 1 ] || usage
 keydir="$1"
 
-if [ -e "${keydir}" ] && [ -n "$(ls -A "${keydir}" 2>/dev/null)" ]; then
-	echo "${keydir} is not empty, refusing to overwrite keys" >&2
-	exit 1
-fi
-
 umask 077
-mkdir -p "${keydir}/uefi" "${keydir}/modsign"
+mkdir -p "${keydir}/uefi" "${keydir}/modsign" "${keydir}/optee"
+
+created=""
+# missing FILE: true when FILE has to be created
+missing() {
+	if [ -e "${keydir}/$1" ]; then
+		echo "Keeping ${keydir}/$1"
+		return 1
+	fi
+	created="${created} $1"
+}
 
 for name in PK KEK db; do
-	openssl req -new -x509 -newkey rsa:2048 -sha256 -days 7300 -nodes \
-		-subj "/CN=${cn} UEFI ${name}/" \
-		-keyout "${keydir}/uefi/${name}.key" -out "${keydir}/uefi/${name}.crt" 2>/dev/null
+	if missing "uefi/${name}.key"; then
+		openssl req -new -x509 -newkey rsa:2048 -sha256 -days 7300 -nodes \
+			-subj "/CN=${cn} UEFI ${name}/" \
+			-keyout "${keydir}/uefi/${name}.key" -out "${keydir}/uefi/${name}.crt" 2>/dev/null
+	fi
 done
 
-# Extensions as in the kernel's certs/default_x509.genkey
-cat > "${keydir}/modsign/x509.genkey" <<EOF
+if missing "modsign/modsign_key.pem"; then
+	# Extensions as in the kernel's certs/default_x509.genkey
+	cat > "${keydir}/modsign/x509.genkey" <<EOF
 [ req ]
 default_bits = 4096
 distinguished_name = req_distinguished_name
@@ -70,20 +82,35 @@ keyUsage=digitalSignature
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid
 EOF
-openssl req -new -x509 -nodes -utf8 -sha256 -days 7300 -batch \
-	-config "${keydir}/modsign/x509.genkey" -outform PEM \
-	-keyout "${keydir}/modsign/modsign_key.pem" -out "${keydir}/modsign/modsign_key.crt" 2>/dev/null
-cat "${keydir}/modsign/modsign_key.crt" >> "${keydir}/modsign/modsign_key.pem"
+	openssl req -new -x509 -nodes -utf8 -sha256 -days 7300 -batch \
+		-config "${keydir}/modsign/x509.genkey" -outform PEM \
+		-keyout "${keydir}/modsign/modsign_key.pem" -out "${keydir}/modsign/modsign_key.crt" 2>/dev/null
+	cat "${keydir}/modsign/modsign_key.crt" >> "${keydir}/modsign/modsign_key.pem"
+fi
+
+if missing "optee/ta_sign_key.pem"; then
+	# RSA-2048, as the default key of OP-TEE that it replaces
+	openssl genrsa -out "${keydir}/optee/ta_sign_key.pem" 2048 2>/dev/null
+fi
 
 if [ "${bootchain}" = "1" ]; then
 	mkdir -p "${keydir}/bootchain"
-	# Orin (T234) accepts RSA-3072 PKC keys
-	openssl genrsa -out "${keydir}/bootchain/pkc.pem" 3072 2>/dev/null
-	# SBK: 256 bits, as eight 32-bit words in hexadecimal
-	printf '%s\n' "$(od -An -tx4 -N32 /dev/urandom | tr -s ' \n' ' ' | \
-		sed -e 's/^ //' -e 's/ $//' -e 's/\([0-9a-f]\{8\}\)/0x\1/g')" > "${keydir}/bootchain/sbk.key"
+	if missing "bootchain/pkc.pem"; then
+		# Orin (T234) accepts RSA-3072 PKC keys
+		openssl genrsa -out "${keydir}/bootchain/pkc.pem" 3072 2>/dev/null
+	fi
+	if missing "bootchain/sbk.key"; then
+		# SBK: 256 bits, as eight 32-bit words in hexadecimal
+		printf '%s\n' "$(od -An -tx4 -N32 /dev/urandom | tr -s ' \n' ' ' | \
+			sed -e 's/^ //' -e 's/ $//' -e 's/\([0-9a-f]\{8\}\)/0x\1/g')" > "${keydir}/bootchain/sbk.key"
+	fi
 fi
 
-echo "Keys created in ${keydir}. Set in local.conf:"
+if [ -z "${created}" ]; then
+	echo "No key was missing in ${keydir}."
+	exit 0
+fi
+echo "Created in ${keydir}:${created}"
+echo "Set in local.conf:"
 echo "  INHERIT += \"torizon-signed\""
 echo "  TEGRA_SECBOOT_KEYDIR = \"$(cd "${keydir}" && pwd)\""

@@ -16,6 +16,8 @@
 #                          torizon-signed inherits) against the commit
 #                          signature
 #   kernel modules         signed, and unsigned ones rejected
+#   trusted applications   OP-TEE only loads the ones signed with the key of
+#                          the key set
 #
 # See docs/README-nvidia-secure-boot.md.
 
@@ -98,6 +100,15 @@ tegra_signed_check_modules() {
 }
 ROOTFS_POSTPROCESS_COMMAND:append = " tegra_signed_check_modules"
 
+# OP-TEE is built with the public part of this key, and only loads trusted
+# applications signed with it. Without it, OP-TEE trusts its default key,
+# whose private part is in the OP-TEE sources.
+TEGRA_OPTEE_TA_SIGN_KEY ?= "${TEGRA_SECBOOT_KEYDIR}/optee/ta_sign_key.pem"
+# Set to a public key (PEM) to make OP-TEE verify the trusted applications
+# with it instead: for an owner who signs them elsewhere and keeps the
+# private key. Trusted applications signed by this build then do not load.
+TEGRA_OPTEE_TA_PUBLIC_KEY ?= ""
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"
@@ -119,11 +130,15 @@ python tegra_torizon_signed_check_keys() {
         os.path.join(d.getVar('TEGRA_UEFI_KEYDIR'), 'PK.crt'),
         os.path.join(d.getVar('TEGRA_UEFI_KEYDIR'), 'KEK.crt'),
         d.getVar('TEGRA_MODSIGN_KEY'),
+        d.getVar('TEGRA_OPTEE_TA_SIGN_KEY'),
     ]
+    if d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'):
+        keys.append(d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'))
     missing = [k for k in keys if not os.path.exists(k)]
     if missing:
         bb.fatal("torizon-signed: missing Jetson Secure Boot keys: %s. Create them "
-                 "with meta-torizon-bsp/scripts/tools/tegra-secboot-genkeys.sh, or set "
+                 "with meta-torizon-bsp/scripts/tools/tegra-secboot-genkeys.sh, which "
+                 "keeps the keys a key directory has already, or set "
                  "TEGRA_SECBOOT_KEYDIR (see docs/README-nvidia-secure-boot.md)."
                  % ' '.join(missing))
 }

@@ -18,6 +18,7 @@ Chain of trust
 | Devicetree | part of the boot chain: the UEFI firmware image carries it, and the UKI boots with the firmware's devicetree | PKC |
 | OSTree deployment (root filesystem) | composefs in the initramfs (`cfs-signed`) | composefs keys |
 | Kernel modules | kernel (`CONFIG_MODULE_SIG_FORCE`) | module signing key |
+| OP-TEE trusted applications | OP-TEE | trusted application signing key |
 
 The kernel runs in lockdown integrity mode.
 
@@ -38,7 +39,16 @@ Create a key set with:
 $ meta-torizon-bsp/scripts/tools/tegra-secboot-genkeys.sh <keydir>
 ```
 
-This creates the UEFI keys (`uefi/`) and the kernel module signing key (`modsign/`). With `--bootchain`, it also creates the boot chain keys (`bootchain/pkc.pem` and `bootchain/sbk.key`), which only take effect once fused.
+This creates:
+
+| Directory | Keys | Used for |
+| :-------- | :--- | :------- |
+| `uefi/` | `PK`, `KEK`, `db` (`.key` and `.crt`) | UEFI Secure Boot. The build signs with `db.key`; the three certificates are enrolled in the firmware. |
+| `modsign/` | `modsign_key.pem` | Signing the kernel modules. |
+| `optee/` | `ta_sign_key.pem` | Signing the OP-TEE trusted applications. OP-TEE is built with its public part. |
+| `bootchain/` | `pkc.pem`, `sbk.key` | Only with `--bootchain`: signing and encrypting the Tegra boot chain. They only take effect once fused. |
+
+The script keeps the keys that a directory has already and creates the missing ones, so run it again on an existing key directory when a newer version of the layer needs more keys. The build stops when a key is missing.
 
 The composefs keys are generated at build time by default (`CFS_GENERATE_KEYS`), as on the other machines.
 
@@ -58,7 +68,8 @@ This makes `torizon-signed` inherit `tegra-torizon-signed` (meta-torizon-bsp) in
 - builds a UKI with the kernel, the initramfs and the kernel command line (`OSTREE_KERNEL_ARGS`), signed with db, and puts it in the OSTree commit as the kernel;
 - adds `uki=1` to `uEnv.txt`, so L4TLauncher boots the UKI before the keys are enrolled too;
 - signs the kernel modules and the out-of-tree ones (`nvidia-kernel-oot`), and builds the kernel with lockdown;
-- enables composefs in signed mode.
+- enables composefs in signed mode;
+- builds OP-TEE with the trusted application key of the key set (`TEGRA_OPTEE_TA_SIGN_KEY`), instead of the default OP-TEE key, whose private part is in the OP-TEE sources.
 
 Keep the key directory. Once the keys are enrolled, the device only boots images signed with them, and that includes the flashing image that `initrd-flash` boots over USB: L4TLauncher verifies it when Secure Boot is enabled. So a device with enrolled keys is reflashed with a package signed with the same keys.
 
@@ -79,12 +90,19 @@ ostree=/ostree/boot.1/torizon/<checksum>/0
 
 The last byte of `SecureBoot` is `01` with Secure Boot enabled.
 
+OP-TEE trusted applications
+---------------------------
+
+OP-TEE only loads trusted applications signed with `optee/ta_sign_key.pem`. The ones that meta-tegra builds are signed with it by the build. Build other trusted applications with the same `TA_SIGN_KEY`. Torizon OS installs none by default.
+
+When the owner of the trusted applications signs them elsewhere and keeps the private key, set `TEGRA_OPTEE_TA_PUBLIC_KEY` to the public key (PEM). OP-TEE then verifies trusted applications with that key, and the ones this build signs with `optee/ta_sign_key.pem` do not load.
+
 Boot chain signing and fusing
 -----------------------------
 
 UEFI Secure Boot alone does not protect the boot chain before UEFI: on a device without fused keys, anyone with access to the recovery port can flash another UEFI firmware. Fusing the PKC key (and optionally the SBK key) closes that, and is **irreversible**: a device fused with a key only boots images signed with it, and a mistake bricks it.
 
-1. Fuse the keys following NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r38.2/DeveloperGuide/SD/Security/SecureBoot.html) documentation (`odmfuse.sh` of the L4T kit). Test the procedure on a device you can afford to lose first.
+1. Fuse the keys following NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/SecureBoot.html) documentation (`odmfuse.sh` of the L4T kit). Test the procedure on a device you can afford to lose first.
 2. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"` (and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused). meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the bootloader update payloads.
 
 Key sets
