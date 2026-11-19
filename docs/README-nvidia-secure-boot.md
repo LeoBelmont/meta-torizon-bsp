@@ -19,6 +19,7 @@ Chain of trust
 | OSTree deployment (root filesystem) | composefs in the initramfs (`cfs-signed`) | composefs keys |
 | Kernel modules | kernel (`CONFIG_MODULE_SIG_FORCE`) | module signing key |
 | OP-TEE trusted applications | OP-TEE | trusted application signing key |
+| Firmware update capsules | UEFI firmware | capsule certificates |
 
 The kernel runs in lockdown integrity mode.
 
@@ -46,9 +47,12 @@ This creates:
 | `uefi/` | `PK`, `KEK`, `db` (`.key` and `.crt`) | UEFI Secure Boot. The build signs with `db.key`; the three certificates are enrolled in the firmware. |
 | `modsign/` | `modsign_key.pem` | Signing the kernel modules. |
 | `optee/` | `ta_sign_key.pem` | Signing the OP-TEE trusted applications. OP-TEE is built with its public part. |
+| `capsule/` | `root`, `sub` (`.key` and `.crt`), `signer.pem` | Signing the firmware update capsules. The firmware is built with `root.crt`, and the build signs with `signer.pem`. |
 | `bootchain/` | `pkc.pem`, `sbk.key` | Only with `--bootchain`: signing and encrypting the Tegra boot chain. They only take effect once fused. |
 
 The script keeps the keys that a directory has already and creates the missing ones, so run it again on an existing key directory when a newer version of the layer needs more keys. The build stops when a key is missing.
+
+The build does not use `capsule/root.key` and `capsule/sub.key`: keep them offline.
 
 The composefs keys are generated at build time by default (`CFS_GENERATE_KEYS`), as on the other machines.
 
@@ -69,7 +73,8 @@ This makes `torizon-signed` inherit `tegra-torizon-signed` (meta-torizon-bsp) in
 - adds `uki=1` to `uEnv.txt`, so L4TLauncher boots the UKI before the keys are enrolled too;
 - signs the kernel modules and the out-of-tree ones (`nvidia-kernel-oot`), and builds the kernel with lockdown;
 - enables composefs in signed mode;
-- builds OP-TEE with the trusted application key of the key set (`TEGRA_OPTEE_TA_SIGN_KEY`), instead of the default OP-TEE key, whose private part is in the OP-TEE sources.
+- builds OP-TEE with the trusted application key of the key set (`TEGRA_OPTEE_TA_SIGN_KEY`), instead of the default OP-TEE key, whose private part is in the OP-TEE sources;
+- builds the UEFI firmware with the capsule root certificate of the key set, instead of the EDK2 test certificate that meta-tegra builds in.
 
 Keep the key directory. Once the keys are enrolled, the device only boots images signed with them, and that includes the flashing image that `initrd-flash` boots over USB: L4TLauncher verifies it when Secure Boot is enabled. So a device with enrolled keys is reflashed with a package signed with the same keys.
 
@@ -97,6 +102,13 @@ OP-TEE only loads trusted applications signed with `optee/ta_sign_key.pem`. The 
 
 When the owner of the trusted applications signs them elsewhere and keeps the private key, set `TEGRA_OPTEE_TA_PUBLIC_KEY` to the public key (PEM). OP-TEE then verifies trusted applications with that key, and the ones this build signs with `optee/ta_sign_key.pem` do not load.
 
+Firmware update capsules
+------------------------
+
+`bitbake tegra-uefi-capsules` builds `tegra-bl.cap`, the capsule that updates the boot chain, signed with `capsule/signer.pem`. The UEFI firmware of a signed build only accepts capsules that chain to `capsule/root.crt`. The firmware a device runs decides which certificate is trusted: a device flashed before this change still trusts the EDK2 test certificate until its firmware is replaced.
+
+Torizon OS does not deliver capsules with its updates yet. To install one by hand, follow the "manually trigger the capsule update" procedure of NVIDIA's [Bootloader update](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Bootloader/UpdateAndRedundancy.html) documentation.
+
 Boot chain signing and fusing
 -----------------------------
 
@@ -122,6 +134,8 @@ Verified on the built images, and by booting the signed image in QEMU (`virt` ma
 - composefs mounts the deployment in `signed` mode, refuses a replaced composefs image, and fs-verity reports a block changed behind the filesystem;
 - the system reaches the login prompt, and `ostree admin status` shows the booted deployment.
 
+The capsule keys were only checked with the EDK2 capsule tool: a capsule signed with them verifies against the root certificate, and not against the EDK2 test certificate. The firmware configuration for the capsule certificate was checked with the configuration tool of the firmware, not built.
+
 Still to be verified on a Jetson: the enrollment of the keys by the NVIDIA firmware, L4TLauncher booting the UKI (and not falling back), the NVIDIA drivers and tools with lockdown, updates and rollback, and reflashing with Secure Boot enabled.
 
 Limitations and open points
@@ -133,6 +147,7 @@ Limitations and open points
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware and not disabled yet. From the setup menu, Secure Boot can be turned off by someone with access to the console.
+- **Capsules**: the capsule keys are in place, but no capsule has been installed on a device, and Torizon OS updates do not deliver them.
 - **Other db-signed images**: with Secure Boot, L4TLauncher boots any image signed with db that `uEnv.txt` points to, not only a UKI. meta-tegra also signs the plain kernel with db; it gets no initramfs and no command line from `uEnv.txt`, so it should stop without a root filesystem: to be confirmed on hardware.
 - **Rollback of a failed update**: when the UKI of a new deployment does not load, L4TLauncher resets instead of falling back to the kernel partition, so that the boot counting of the Torizon boot mode rolls back. To be confirmed on hardware.
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.

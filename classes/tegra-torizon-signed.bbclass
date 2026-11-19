@@ -18,6 +18,8 @@
 #   kernel modules         signed, and unsigned ones rejected
 #   trusted applications   OP-TEE only loads the ones signed with the key of
 #                          the key set
+#   firmware updates       capsules authenticated with the certificates of
+#                          the key set
 #
 # See docs/README-nvidia-secure-boot.md.
 
@@ -109,6 +111,17 @@ TEGRA_OPTEE_TA_SIGN_KEY ?= "${TEGRA_SECBOOT_KEYDIR}/optee/ta_sign_key.pem"
 # private key. Trusted applications signed by this build then do not load.
 TEGRA_OPTEE_TA_PUBLIC_KEY ?= ""
 
+# Firmware update capsules (tegra-uefi-capsules): signed with signer.pem,
+# which sub.crt and root.crt certify. The UEFI firmware authenticates them
+# with root.crt (see edk2-firmware-tegra_%.bbappend), instead of the EDK2
+# test certificates that meta-tegra uses, whose private keys are public.
+TEGRA_UEFI_CAPSULE_KEYDIR ?= "${TEGRA_SECBOOT_KEYDIR}/capsule"
+UEFI_CAPSULE_SIGNER_PRIVATE_CERT ?= "${TEGRA_UEFI_CAPSULE_KEYDIR}/signer.pem"
+UEFI_CAPSULE_OTHER_PUBLIC_CERT ?= "${TEGRA_UEFI_CAPSULE_KEYDIR}/sub.crt"
+UEFI_CAPSULE_TRUSTED_PUBLIC_CERT ?= "${TEGRA_UEFI_CAPSULE_KEYDIR}/root.crt"
+# The capsule carries the image of the kernel partition
+TEGRA_UEFI_CAPSULE_SIGNING_EXTRA_DEPS:append = " tegra-secboot-halt-initramfs:do_image_complete"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"
@@ -131,6 +144,9 @@ python tegra_torizon_signed_check_keys() {
         os.path.join(d.getVar('TEGRA_UEFI_KEYDIR'), 'KEK.crt'),
         d.getVar('TEGRA_MODSIGN_KEY'),
         d.getVar('TEGRA_OPTEE_TA_SIGN_KEY'),
+        d.getVar('UEFI_CAPSULE_SIGNER_PRIVATE_CERT'),
+        d.getVar('UEFI_CAPSULE_OTHER_PUBLIC_CERT'),
+        d.getVar('UEFI_CAPSULE_TRUSTED_PUBLIC_CERT'),
     ]
     if d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'):
         keys.append(d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'))

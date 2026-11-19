@@ -10,6 +10,10 @@
 #                            the UKI, PK and KEK are enrolled with it
 #   modsign/modsign_key.pem  kernel module signing key and certificate
 #   optee/ta_sign_key.pem    OP-TEE trusted application signing key
+#   capsule/root.{key,crt} capsule/sub.{key,crt} capsule/signer.pem
+#                            certificate chain for the firmware update
+#                            capsules: the firmware trusts root.crt, and the
+#                            build signs with signer.pem (certificate and key)
 #   bootchain/pkc.pem        with --bootchain: Tegra boot chain signing key
 #   bootchain/sbk.key        with --bootchain: Tegra boot chain encryption key
 #
@@ -19,8 +23,9 @@
 # The boot chain keys only take effect once fused in the SoC, which is
 # irreversible: see docs/README-nvidia-secure-boot.md before fusing.
 #
-# Keep production keys off the build machine where possible, and never commit
-# them to a repository.
+# The build does not need capsule/root.key and capsule/sub.key: keep them
+# offline. Keep production keys off the build machine where possible, and
+# never commit them to a repository.
 
 set -eu
 
@@ -43,7 +48,7 @@ done
 keydir="$1"
 
 umask 077
-mkdir -p "${keydir}/uefi" "${keydir}/modsign" "${keydir}/optee"
+mkdir -p "${keydir}/uefi" "${keydir}/modsign" "${keydir}/optee" "${keydir}/capsule"
 
 created=""
 # missing FILE: true when FILE has to be created
@@ -91,6 +96,43 @@ fi
 if missing "optee/ta_sign_key.pem"; then
 	# RSA-2048, as the default key of OP-TEE that it replaces
 	openssl genrsa -out "${keydir}/optee/ta_sign_key.pem" 2048 2>/dev/null
+fi
+
+# Root, intermediate and signing certificates, with the extensions of the
+# EDK2 test certificates (BaseTools/Source/Python/Pkcs7Sign/Readme.md)
+if missing "capsule/signer.pem"; then
+	c="${keydir}/capsule"
+	cat > "${c}/openssl.cnf" <<EOF
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical,CA:true
+keyUsage = critical,digitalSignature,cRLSign,keyCertSign
+
+[ usr_cert ]
+basicConstraints = CA:FALSE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+keyUsage = critical,nonRepudiation,digitalSignature,keyEncipherment
+EOF
+	openssl req -new -x509 -newkey rsa:3072 -sha256 -days 7300 -nodes \
+		-subj "/CN=${cn} capsule root/" \
+		-addext "keyUsage=critical,digitalSignature,cRLSign,keyCertSign" \
+		-keyout "${c}/root.key" -out "${c}/root.crt" 2>/dev/null
+	openssl req -new -newkey rsa:3072 -sha256 -nodes \
+		-subj "/CN=${cn} capsule intermediate/" \
+		-keyout "${c}/sub.key" -out "${c}/sub.csr" 2>/dev/null
+	openssl x509 -req -in "${c}/sub.csr" -sha256 -days 7300 \
+		-CA "${c}/root.crt" -CAkey "${c}/root.key" -CAcreateserial \
+		-extfile "${c}/openssl.cnf" -extensions v3_ca -out "${c}/sub.crt" 2>/dev/null
+	openssl req -new -newkey rsa:3072 -sha256 -nodes \
+		-subj "/CN=${cn} capsule signing/" \
+		-keyout "${c}/signer.key" -out "${c}/signer.csr" 2>/dev/null
+	openssl x509 -req -in "${c}/signer.csr" -sha256 -days 7300 \
+		-CA "${c}/sub.crt" -CAkey "${c}/sub.key" -CAcreateserial \
+		-extfile "${c}/openssl.cnf" -extensions usr_cert -out "${c}/signer.crt" 2>/dev/null
+	cat "${c}/signer.crt" "${c}/signer.key" > "${c}/signer.pem"
+	rm -f "${c}/sub.csr" "${c}/signer.csr" "${c}/signer.key" "${c}/signer.crt"
 fi
 
 if [ "${bootchain}" = "1" ]; then
