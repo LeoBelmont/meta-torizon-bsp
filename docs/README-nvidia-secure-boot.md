@@ -147,6 +147,23 @@ Torizon OS does not deliver capsules with its updates yet. To install one on a d
 
 A boot firmware update is not undone when the operating system rolls back, and a deployment booted on purpose with an older capsule gets that older firmware installed again.
 
+Anti-rollback limit
+-------------------
+
+Every image ever released stays correctly signed, so Secure Boot alone does not keep an old release from being booted again, through an update or by someone who writes an old deployment to the storage. The limit is a security version:
+
+- `TEGRA_SECBOOT_SECURITY_VERSION` (default `"0"`) is a whole number that the build puts in the `.tznsv` section of the UKI, where the signature of the UKI covers it.
+- L4TLauncher keeps the minimum it accepts in the `TorizonSecurityVersionMin` variable, which is non-volatile and has no runtime access: the operating system cannot read or write it. It refuses a UKI with a lower security version, like one with a bad signature.
+- It raises the minimum to the version of the UKI it boots when that is higher, and the UKI is neither being tried as an update nor booted as a rollback. A new release therefore only locks out the previous ones after it was confirmed, and the rollback of a failed update still works.
+
+Raise the security version by hand, in the release that must not be undone, and leave it alone otherwise: once a device has confirmed a release with a higher version, the releases before it no longer boot on that device, not even as the rollback of a later update, and it then needs a newer update or to be flashed. A full flash erases the minimum with the other firmware variables.
+
+`tegra-secboot-check` shows the security version of the booted image and the minimum, which L4TLauncher publishes in the volatile `TorizonSecurityVersions` variable.
+
+On a device whose boot chain keys are not fused, the minimum is as safe as the firmware variables are: someone who rewrites the QSPI flash resets it. NVIDIA's UEFI variable protection, which needs a key in the EKB, closes that on fused devices.
+
+Not built or tested on a device yet. The check itself passes a compile against the EDK2 headers and tests on the build host.
+
 Changing the enrolled keys
 --------------------------
 
@@ -247,6 +264,7 @@ Limitations and open points
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
 - **UEFI key updates**: the build puts signed KEK, `db` and `dbx` updates in the capsule (see "Changing the enrolled keys"), but none has been applied on a device, and Torizon OS updates do not deliver capsules.
+- **Anti-rollback limit**: see the section of that name. It covers the UKI, and through it the deployment that the UKI's initramfs accepts; it is not built or tested on a device yet. The boot firmware has its own limit, the lowest supported version of a capsule.
 - **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.
 - Only the Jetson Orin Nano is covered. Thor (T264) uses other boot chain keys.

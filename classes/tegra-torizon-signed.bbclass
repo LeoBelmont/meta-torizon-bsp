@@ -57,6 +57,14 @@ UKI_FILENAME = "${IMAGE_BASENAME}-${MACHINE}.efi"
 TEGRA_SECBOOT_KERNEL_CMDLINE ?= "${OSTREE_KERNEL_ARGS}"
 TEGRA_SECBOOT_FORCE_CMDLINE ?= "1"
 UKI_CMDLINE = "${TEGRA_SECBOOT_KERNEL_CMDLINE}"
+# Anti-rollback limit: the security version of the image, a whole number in
+# the ".tznsv" section of the UKI. L4TLauncher refuses a UKI with a lower
+# version than the highest one that was booted and confirmed on the device.
+# Raise it, by hand, in the release that must not be undone: the releases
+# before it then no longer boot on a device that confirmed it, not even as
+# the rollback of a later update. Leave it alone otherwise.
+TEGRA_SECBOOT_SECURITY_VERSION ?= "0"
+UKIFY_CMD:append = " --section=.tznsv:${TEGRA_SECBOOT_SECURITY_VERSION}"
 UKI_DEVICETREE = ""
 UKI_SB_KEY = "${TEGRA_UEFI_DB_KEY}"
 UKI_SB_CERT = "${TEGRA_UEFI_DB_CERT}"
@@ -227,6 +235,10 @@ python tegra_torizon_signed_check_keys() {
     ]
     if d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'):
         keys.append(d.getVar('TEGRA_OPTEE_TA_PUBLIC_KEY'))
+    secver = d.getVar('TEGRA_SECBOOT_SECURITY_VERSION') or ''
+    if not secver.isdigit() or int(secver) > 0xffffffff:
+        bb.fatal("torizon-signed: TEGRA_SECBOOT_SECURITY_VERSION must be a whole number "
+                 "from 0 to 4294967295, not '%s'" % secver)
     missing = [k for k in keys if not os.path.exists(k)]
     if missing:
         bb.fatal("torizon-signed: missing Jetson Secure Boot keys: %s. Create them "

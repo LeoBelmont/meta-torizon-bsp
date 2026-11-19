@@ -169,6 +169,13 @@ fi
 if command -v fw_printenv >/dev/null 2>&1; then
 	info "update state: $(fw_printenv upgrade_available bootcount rollback 2>/dev/null | tr '\n' ' ')"
 fi
+# Anti-rollback limit: L4TLauncher publishes the security version of the UKI
+# it booted and the minimum it accepts, two 32 bit numbers
+v="$(od -An -tu4 -j4 -N8 "${EFIVARS}/TorizonSecurityVersions-${TORIZON_GUID}" 2>/dev/null)"
+if [ -n "$v" ]; then
+	set -- $v
+	info "security version of the boot image: $1, minimum accepted: $2"
+fi
 # The firmware needs the platform spec to accept a capsule
 v="$(dd if="${EFIVARS}/TegraPlatformSpec-${NVIDIA_GUID}" bs=1 skip=4 2>/dev/null | tr -d '\000\r\n')"
 if [ -n "$v" ]; then

@@ -352,6 +352,8 @@ def check_rootfs(pkg, keydir, tmp, unsigned_ok):
         ok('the boot image is a UKI, with kernel, initramfs and command line')
         cmdline = sections['.cmdline'].rstrip(b'\0\n').decode('latin-1')
         info('command line of the UKI: %s' % cmdline)
+        secver = sections.get('.tznsv', b'0').rstrip(b'\0\n').decode('latin-1')
+        info('security version of the UKI (anti-rollback limit): %s' % (secver or '0'))
         if 'ostree=' in cmdline:
             fail('the command line of the UKI has an ostree= argument')
     else:
