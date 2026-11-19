@@ -31,7 +31,9 @@ When the Torizon boot fails, L4TLauncher does not fall back to the kernel partit
 
 composefs verifies the root filesystem in two ways. The composefs image of the deployment must have the fs-verity digest recorded in the signed OSTree commit, or the deployment is not mounted and the boot stops. The content of the files is verified by fs-verity when it is read: a block changed behind the filesystem gives an I/O error instead of the changed data, so such a system may still boot, without the affected files.
 
-The devicetree is only verified on fused devices: without the boot chain keys fused, nothing checks the UEFI firmware image that carries it.
+By default the kernel gets the devicetree of the boot chain, which is only verified on fused devices: without the boot chain keys fused, nothing checks the UEFI firmware image that carries it. An update of the operating system does not change that devicetree either.
+
+`TEGRA_SECBOOT_KERNEL_DTB = "1"` boots with the devicetree of the deployment instead, as unsigned images do. The build puts the devicetrees in the OSTree commit, each with a detached signature made with the db key, and L4TLauncher verifies the signature before it installs the devicetree for the kernel. A UKI boot stops when the devicetree that `uEnv.txt` names is missing or does not verify. Someone who removes the devicetree from `uEnv.txt` gets the one of the boot chain, not one of their own. Not built or tested on a device yet.
 
 Keys
 ----
@@ -264,6 +266,7 @@ Limitations and open points
 - **Kernel options for composefs**: added for the Jetson kernel by this change (`composefs.cfg`, `composefs-fsverity.cfg`); composefs has not run on Jetson before.
 - **Image size**: signed images use composefs, for which the resize helper is off, so the root filesystem image has the size of the whole partition (about 28 GiB, sparse).
 - **UEFI key updates**: the build puts signed KEK, `db` and `dbx` updates in the capsule (see "Changing the enrolled keys"), but none has been applied on a device, and Torizon OS updates do not deliver capsules.
+- **Devicetree of the deployment** (`TEGRA_SECBOOT_KERNEL_DTB`): not built or tested on a device yet. Devicetree overlays are not applied in a UKI boot.
 - **Anti-rollback limit**: see the section of that name. It covers the UKI, and through it the deployment that the UKI's initramfs accepts; it is not built or tested on a device yet. The boot firmware has its own limit, the lowest supported version of a capsule.
 - **Unsigned staging drivers**: the Ubuntu based kernel does not sign the staging drivers that are not in its `debian/signature-inclusion` list, so they cannot be loaded (`meson-vdec` in the current image). The build accepts unsigned modules only there (`TEGRA_MODSIGN_UNSIGNED_OK`) and stops on any other.
 - **The module signing key in the build**: `modsign_key.pem`, with the private key, is copied to the kernel build directories and ends up in their sstate. `kernel-devsrc` does not package it. Keep the build directory and the sstate cache of production builds private.

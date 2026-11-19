@@ -359,6 +359,32 @@ def check_rootfs(pkg, keydir, tmp, unsigned_ok):
     else:
         fail('the boot image is not a UKI (sections: %s)' % ' '.join(sorted(sections)))
 
+    # Devicetrees of the deployment (TEGRA_SECBOOT_KERNEL_DTB)
+    m = re.search(r'^fdtdir=(\S+)', uenv, re.M)
+    if not m:
+        info('no devicetree in the deployment: the kernel gets the one of the boot chain')
+    else:
+        dtbdir = os.path.join(tmp, 'dtb')
+        os.mkdir(dtbdir)
+        debugfs(image, 'rdump %s %s' % (m.group(1), dtbdir))
+        dtbs = []
+        for root, _dirs, files in os.walk(dtbdir):
+            dtbs += [os.path.join(root, f) for f in files if f.endswith('.dtb')]
+        if not dtbs:
+            fail('uEnv.txt names a devicetree directory, %s, with no devicetree in it' % m.group(1))
+        db = os.path.join(keydir, 'uefi', 'db.crt')
+        for dtb in sorted(dtbs):
+            name = os.path.basename(dtb)
+            if not os.path.exists(dtb + '.sig'):
+                fail('the devicetree %s has no signature (%s.sig)' % (name, name))
+                continue
+            r = run(['openssl', 'cms', '-verify', '-binary', '-inform', 'DER', '-in', dtb + '.sig',
+                     '-content', dtb, '-CAfile', db, '-purpose', 'any', '-out', os.devnull])
+            if r.returncode == 0:
+                ok('the devicetree %s is signed with db' % name)
+            else:
+                fail('the signature of the devicetree %s does not verify with db of the key set' % name)
+
     # Kernel modules of the deployment
     deploy = '/ostree/deploy/torizon/deploy'
     listing = debugfs(image, 'ls -p %s' % deploy).stdout.decode('latin-1')

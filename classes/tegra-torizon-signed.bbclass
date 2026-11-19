@@ -68,8 +68,16 @@ UKIFY_CMD:append = " --section=.tznsv:${TEGRA_SECBOOT_SECURITY_VERSION}"
 UKI_DEVICETREE = ""
 UKI_SB_KEY = "${TEGRA_UEFI_DB_KEY}"
 UKI_SB_CERT = "${TEGRA_UEFI_DB_CERT}"
+# The UKI carries no devicetree. By default the kernel gets the one of the
+# boot chain, which is only verified on a device with the boot chain keys
+# fused, and which an update of the operating system does not change.
+# Set to "1" to boot with the devicetree of the deployment instead: the
+# build puts the devicetrees in the OSTree commit with a signature made with
+# the db key (ostree-kernel-initramfs_%.bbappend), and L4TLauncher verifies
+# it. The boot stops when the devicetree does not verify.
+TEGRA_SECBOOT_KERNEL_DTB ?= "0"
 # As an override: torizon.bbclass is inherited after this class and sets it
-OSTREE_DEPLOY_DEVICETREE:tegra-signed = "0"
+OSTREE_DEPLOY_DEVICETREE:tegra-signed = "${TEGRA_SECBOOT_KERNEL_DTB}"
 
 # The kernel partition, which L4TLauncher boots when told to
 # (bootmode=bootimg), gets an image that stops instead of the meta-tegra
