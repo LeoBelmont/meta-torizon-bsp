@@ -14,8 +14,14 @@
 #                            certificate chain for the firmware update
 #                            capsules: the firmware trusts root.crt, and the
 #                            build signs with signer.pem (certificate and key)
-#   bootchain/pkc.pem        with --bootchain: Tegra boot chain signing key
+#   bootchain/pkc.pem        with --bootchain: Tegra boot chain signing key,
+#   bootchain/pkc1.pem         and two more, to fuse their hashes too
+#   bootchain/pkc2.pem
 #   bootchain/sbk.key        with --bootchain: Tegra boot chain encryption key
+#   bootchain/oem_k1.key     with --bootchain: fuse keys OemK1 (the key of the
+#   bootchain/oem_k2.key       EKB) and OemK2
+#   bootchain/ekb_auth.key   with --bootchain: keys inside the EKB, for the UEFI
+#   bootchain/ekb_sym2.key     variable authentication and the disk encryption
 #
 # Keys that exist are kept: run it again on a key directory to add the keys
 # that a newer version of the layer needs.
@@ -158,15 +164,34 @@ fi
 
 if [ "${bootchain}" = "1" ]; then
 	mkdir -p "${keydir}/bootchain"
-	if missing "bootchain/pkc.pem"; then
-		# Orin (T234) accepts RSA-3072 PKC keys
-		openssl genrsa -out "${keydir}/bootchain/pkc.pem" 3072 2>/dev/null
-	fi
+	# Orin (T234) accepts RSA-3072 PKC keys. Three of them: the hashes of
+	# the PKC keys can only be fused once, and with three fused, a key can
+	# be revoked later. The build signs with pkc.pem.
+	for name in pkc pkc1 pkc2; do
+		if missing "bootchain/${name}.pem"; then
+			openssl genrsa -out "${keydir}/bootchain/${name}.pem" 3072 2>/dev/null
+		fi
+	done
 	if missing "bootchain/sbk.key"; then
 		# SBK: 256 bits, as eight 32-bit words in hexadecimal
 		printf '%s\n' "$(od -An -tx4 -N32 /dev/urandom | tr -s ' \n' ' ' | \
 			sed -e 's/^ //' -e 's/ $//' -e 's/\([0-9a-f]\{8\}\)/0x\1/g')" > "${keydir}/bootchain/sbk.key"
 	fi
+	# OemK1 and OemK2, the fuse keys for the EKB and other uses: 256 bits,
+	# as one hexadecimal number, the form that gen_ekb.py reads. And the
+	# keys that go into the EKB: the one that authenticates the UEFI
+	# variables (128 bits) and the disk encryption key (256 bits).
+	for name in oem_k1 oem_k2 ekb_sym2; do
+		if missing "bootchain/${name}.key"; then
+			od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "${keydir}/bootchain/${name}.key"
+			echo >> "${keydir}/bootchain/${name}.key"
+		fi
+	done
+	if missing "bootchain/ekb_auth.key"; then
+		od -An -tx1 -N16 /dev/urandom | tr -d ' \n' > "${keydir}/bootchain/ekb_auth.key"
+		echo >> "${keydir}/bootchain/ekb_auth.key"
+	fi
+	chmod 600 "${keydir}"/bootchain/*.key "${keydir}"/bootchain/*.pem
 fi
 
 if [ -z "${created}" ]; then
