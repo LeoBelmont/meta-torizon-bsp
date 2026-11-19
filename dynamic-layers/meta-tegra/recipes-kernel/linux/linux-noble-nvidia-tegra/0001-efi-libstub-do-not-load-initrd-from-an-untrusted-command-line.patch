@@ -1,0 +1,34 @@
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Subject: [PATCH] efi/libstub: do not load initrd= with a forced command line
+
+With CONFIG_CMDLINE_FORCE, the kernel ignores the command line it is
+started with. The EFI stub still reads "initrd=" from the load options
+and loads that file as the initrd, so whoever starts the kernel image
+still chooses the first user space that runs.
+
+On a UEFI Secure Boot system where the kernel image is signed, that is a
+way around the verified boot: the firmware starts the signed kernel with
+any load options. Ignore "initrd=" too when the command line is forced.
+An initrd from a loader, through the LINUX_EFI_INITRD_MEDIA_GUID device
+path, is not affected.
+
+Upstream-Status: Inappropriate [Torizon OS secure boot configuration]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+--- a/drivers/firmware/efi/libstub/efi-stub-helper.c
++++ b/drivers/firmware/efi/libstub/efi-stub-helper.c
+@@ -593,6 +593,14 @@
+ 	if (image == NULL)
+ 		return EFI_UNSUPPORTED;
+ 
++	/*
++	 * With a forced command line, the options the kernel is started with
++	 * are not trusted: do not load the initrd they name either. An initrd
++	 * still comes from the LINUX_EFI_INITRD_MEDIA_GUID device path.
++	 */
++	if (IS_ENABLED(CONFIG_CMDLINE_FORCE))
++		return EFI_UNSUPPORTED;
++
+ 	return handle_cmdline_files(image, L"initrd=", sizeof(L"initrd=") - 2,
+ 				    soft_limit, hard_limit,
+ 				    &initrd->base, &initrd->size);

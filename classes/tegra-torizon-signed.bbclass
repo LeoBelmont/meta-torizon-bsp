@@ -51,7 +51,12 @@ IMAGE_CLASSES:remove:pn-tegra-secboot-halt-initramfs = "uki"
 do_uki[depends] += "sbsigntool-native:do_populate_sysroot"
 # One UKI per image: do_uki writes it straight to DEPLOY_DIR_IMAGE
 UKI_FILENAME = "${IMAGE_BASENAME}-${MACHINE}.efi"
-UKI_CMDLINE = "${OSTREE_KERNEL_ARGS}"
+# The kernel is built with the same command line and takes no other
+# (CONFIG_CMDLINE_FORCE, see linux-noble-nvidia-tegra%.bbappend): its image
+# is signed with db on its own, and must not be usable with other arguments.
+TEGRA_SECBOOT_KERNEL_CMDLINE ?= "${OSTREE_KERNEL_ARGS}"
+TEGRA_SECBOOT_FORCE_CMDLINE ?= "1"
+UKI_CMDLINE = "${TEGRA_SECBOOT_KERNEL_CMDLINE}"
 UKI_DEVICETREE = ""
 UKI_SB_KEY = "${TEGRA_UEFI_DB_KEY}"
 UKI_SB_CERT = "${TEGRA_UEFI_DB_CERT}"
