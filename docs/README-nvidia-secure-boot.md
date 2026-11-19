@@ -160,7 +160,7 @@ Limitations and open points
 
 - **Not validated on a Jetson**, in particular:
   - the L4TLauncher change (`0002-L4TLauncher-boot-signed-UKIs-in-the-Torizon-boot-mode.patch`) builds, but has not booted yet;
-  - `UefiDefaultSecurityKeys.dts` is written from what the firmware reads (`NvSecureBootProvisionDxe` and `DefaultVariableDxe` in edk2-nvidia), not yet compared with the output of `gen_uefi_keys_dts.sh` of the L4T kit.
+  - `UefiDefaultSecurityKeys.dts` has the same nodes and properties as the one `gen_uefi_keys_dts.sh` of the L4T kit (R39.2.1) writes, and its key lists are well-formed EFI signature lists with the three certificates. The firmware has not read it on a device yet.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Compare `/proc/cmdline` with an unsigned image to confirm.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and parts of debugfs. Check the NVIDIA tools in use (`nvpmodel`, `jetson_clocks`, ...).
 - **UEFI setup menu and shell**: they are part of the firmware unless `TEGRA_SECBOOT_UEFI_MENU = "0"`, which has been checked against the firmware configuration but not built or booted yet. Whether the menu really refuses to turn Secure Boot off once it is enabled is to be confirmed on hardware.
