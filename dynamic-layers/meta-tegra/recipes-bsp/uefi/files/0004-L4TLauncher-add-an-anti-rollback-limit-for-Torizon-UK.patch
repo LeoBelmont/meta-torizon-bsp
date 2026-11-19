@@ -1,0 +1,278 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Leonardo Bornia <leonardo.bornia@toradex.com>
+Date: Thu, 19 Nov 2026 16:41:19 -0300
+Subject: [PATCH] L4TLauncher: add an anti-rollback limit for Torizon UKIs
+
+Every UKI ever released stays correctly signed, so UEFI Secure Boot
+alone does not keep an old release, with known problems, from being
+booted again: through an update, or by someone who writes an old
+deployment and its UKI to the storage and edits uEnv.txt.
+
+Give the UKI a security version, a decimal number in its ".tznsv"
+section, which the signature of the UKI covers. Before starting a UKI
+in the Torizon boot mode, compare it with a minimum kept in the
+TorizonSecurityVersionMin variable, which is non-volatile and has no
+runtime access: the operating system cannot read or write it. A UKI
+below the minimum is refused, like one with a bad signature. A UKI
+without the section has the version 0.
+
+The minimum is raised to the version of the UKI when that is higher
+and the UKI is neither being tried as an update nor booted as a
+rollback. So a new release only locks out the previous ones after it
+was confirmed, and the rollback of a failed update still works.
+
+Both numbers are published in the volatile TorizonSecurityVersions
+variable, for the operating system to read.
+
+Upstream-Status: Inappropriate [Torizon specific]
+Signed-off-by: Leonardo Bornia <leonardo.bornia@toradex.com>
+---
+ .../Application/L4TLauncher/L4TLauncher.c     | 207 ++++++++++++++++++
+ 1 file changed, 207 insertions(+)
+
+diff --git a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+index 4f92d19..8cf3a61 100644
+--- a/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
++++ b/Silicon/NVIDIA/Application/L4TLauncher/L4TLauncher.c
+@@ -7,6 +7,7 @@
+ 
+ **/
+ 
++#include <Library/BaseLib.h>
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/UefiLib.h>
+ #include <Library/ShellLib.h>
+@@ -37,6 +38,7 @@
+ #include <Guid/ImageAuthentication.h>
+ 
+ #include <UefiSecureBoot.h>
++#include <IndustryStandard/PeImage.h>
+ #include <Library/SecureBootVariableLib.h>
+ 
+ #include <NVIDIAConfiguration.h>
+@@ -1265,6 +1267,197 @@ STATIC EFI_GUID  mTorizonBootVariableGuid = TORIZON_BOOT_VARIABLE_GUID;
+ // Set when the Torizon boot mode boots a UKI
+ STATIC BOOLEAN  mTorizonUkiBoot = FALSE;
+ 
++#define TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME  L"TorizonSecurityVersionMin"
++#define TORIZON_SECURITY_VERSIONS_VARIABLE_NAME     L"TorizonSecurityVersions"
++
++// Boot flags of the boot in progress, for the security version check
++STATIC UINT8  mTorizonBootFlags = 0;
++
++// Section of a UKI with its security version, a decimal number as text
++STATIC CONST UINT8  mTorizonSecurityVersionSection[EFI_IMAGE_SIZEOF_SHORT_NAME] = {
++  '.', 't', 'z', 'n', 's', 'v', 0, 0
++};
++
++/**
++  Get the security version of a loaded UKI
++
++  The build puts the version, a decimal number, in the ".tznsv" section of
++  the UKI, so the signature of the UKI covers it. An image without the
++  section has the version 0.
++
++  @param[in]  ImageBase  Address the image is loaded at
++  @param[in]  ImageSize  Size of the loaded image
++
++  @return The security version, 0 when the image has none
++**/
++STATIC
++UINT32
++TorizonImageSecurityVersion (
++  IN CONST UINT8  *ImageBase,
++  IN UINT64       ImageSize
++  )
++{
++  CONST EFI_IMAGE_DOS_HEADER      *DosHeader;
++  CONST EFI_IMAGE_FILE_HEADER     *FileHeader;
++  CONST EFI_IMAGE_SECTION_HEADER  *Section;
++  UINT64                          Offset;
++  UINT64                          Size;
++  UINT64                          Index;
++  UINT32                          Version;
++  UINT8                           Digit;
++
++  if ((ImageBase == NULL) || (ImageSize < sizeof (EFI_IMAGE_DOS_HEADER))) {
++    return 0;
++  }
++
++  DosHeader = (CONST EFI_IMAGE_DOS_HEADER *)ImageBase;
++  if (DosHeader->e_magic != EFI_IMAGE_DOS_SIGNATURE) {
++    return 0;
++  }
++
++  // The PE signature, then the file header
++  Offset = DosHeader->e_lfanew;
++  if ((Offset + sizeof (UINT32) + sizeof (EFI_IMAGE_FILE_HEADER)) > ImageSize) {
++    return 0;
++  }
++
++  if (ReadUnaligned32 ((CONST UINT32 *)(ImageBase + Offset)) != EFI_IMAGE_NT_SIGNATURE) {
++    return 0;
++  }
++
++  FileHeader = (CONST EFI_IMAGE_FILE_HEADER *)(ImageBase + Offset + sizeof (UINT32));
++  Offset    += sizeof (UINT32) + sizeof (EFI_IMAGE_FILE_HEADER) + FileHeader->SizeOfOptionalHeader;
++  if ((Offset + (UINT64)FileHeader->NumberOfSections * sizeof (EFI_IMAGE_SECTION_HEADER)) > ImageSize) {
++    return 0;
++  }
++
++  Section = (CONST EFI_IMAGE_SECTION_HEADER *)(ImageBase + Offset);
++  for (Index = 0; Index < FileHeader->NumberOfSections; Index++, Section++) {
++    if (CompareMem (Section->Name, mTorizonSecurityVersionSection, EFI_IMAGE_SIZEOF_SHORT_NAME) != 0) {
++      continue;
++    }
++
++    Offset = Section->VirtualAddress;
++    Size   = Section->Misc.VirtualSize;
++    if ((Offset > ImageSize) || (Size > (ImageSize - Offset))) {
++      return 0;
++    }
++
++    Version = 0;
++    for (Index = 0; Index < Size; Index++) {
++      Digit = ImageBase[Offset + Index];
++      if ((Digit < '0') || (Digit > '9')) {
++        break;
++      }
++
++      Digit -= '0';
++      if (Version > ((MAX_UINT32 - Digit) / 10)) {
++        return MAX_UINT32;
++      }
++
++      Version = Version * 10 + Digit;
++    }
++
++    return Version;
++  }
++
++  return 0;
++}
++
++/**
++  Check the security version of a loaded UKI against the minimum
++
++  The minimum is in a non-volatile variable without runtime access, which
++  the operating system cannot read or write. An image with a security
++  version below it is refused, like an image with a bad signature: this is
++  the anti-rollback limit. The minimum is raised to the version of the
++  image when that is higher and the image is not being tried as an update
++  nor booted as a rollback, so a new release only locks out the previous
++  ones once it was confirmed.
++
++  Both numbers are published in a volatile variable for the operating
++  system to read.
++
++  @param[in]  KernelHandle  Handle of the loaded image
++
++  @retval EFI_SUCCESS             The image may be started
++  @retval EFI_SECURITY_VIOLATION  The image is below the minimum
++**/
++STATIC
++EFI_STATUS
++TorizonCheckSecurityVersion (
++  IN EFI_HANDLE  KernelHandle
++  )
++{
++  EFI_STATUS                 Status;
++  EFI_LOADED_IMAGE_PROTOCOL  *ImageInfo;
++  UINTN                      DataSize;
++  UINT32                     Version;
++  UINT32                     Minimum;
++  UINT32                     Versions[2];
++
++  Status = gBS->HandleProtocol (KernelHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&ImageInfo);
++  if (EFI_ERROR (Status)) {
++    return Status;
++  }
++
++  Version = TorizonImageSecurityVersion ((CONST UINT8 *)ImageInfo->ImageBase, ImageInfo->ImageSize);
++
++  Minimum  = 0;
++  DataSize = sizeof (Minimum);
++  Status   = gRT->GetVariable (
++                    TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
++                    &mTorizonBootVariableGuid,
++                    NULL,
++                    &DataSize,
++                    &Minimum
++                    );
++  if (Status == EFI_NOT_FOUND) {
++    Minimum = 0;
++  } else if (EFI_ERROR (Status) || (DataSize != sizeof (Minimum))) {
++    ErrorPrint (L"%a: Unable to read %s: %r\r\n", __FUNCTION__, TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME, Status);
++    return EFI_SECURITY_VIOLATION;
++  }
++
++  if (Version < Minimum) {
++    ErrorPrint (L"%a: security version %u of the boot image is below the minimum %u\r\n", __FUNCTION__, Version, Minimum);
++    return EFI_SECURITY_VIOLATION;
++  }
++
++  if ((Version > Minimum) &&
++      ((mTorizonBootFlags & (TORIZON_BOOTFLAGS_UPGRADE_AVAILABLE | TORIZON_BOOTFLAGS_ROLLBACK)) == 0))
++  {
++    Status = gRT->SetVariable (
++                    TORIZON_SECURITY_VERSION_MIN_VARIABLE_NAME,
++                    &mTorizonBootVariableGuid,
++                    EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS,
++                    sizeof (Version),
++                    &Version
++                    );
++    if (EFI_ERROR (Status)) {
++      ErrorPrint (L"%a: Failed to raise the minimum security version to %u: %r\r\n", __FUNCTION__, Version, Status);
++    } else {
++      ErrorPrint (L"%a: minimum security version raised from %u to %u\r\n", __FUNCTION__, Minimum, Version);
++      Minimum = Version;
++    }
++  }
++
++  Versions[0] = Version;
++  Versions[1] = Minimum;
++  Status      = gRT->SetVariable (
++                       TORIZON_SECURITY_VERSIONS_VARIABLE_NAME,
++                       &mTorizonBootVariableGuid,
++                       EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++                       sizeof (Versions),
++                       Versions
++                       );
++  if (EFI_ERROR (Status)) {
++    ErrorPrint (L"%a: Failed to set %s: %r\r\n", __FUNCTION__, TORIZON_SECURITY_VERSIONS_VARIABLE_NAME, Status);
++  }
++
++  return EFI_SUCCESS;
++}
++
+ /**
+   Export the bootargs of the selected uEnv.txt slot for the initramfs
+ 
+@@ -1553,6 +1746,7 @@ ProcessExtLinuxConfig (
+ 
+   if (TorizonUki) {
+     mTorizonUkiBoot = TRUE;
++    mTorizonBootFlags = BootParams->TorizonBootFlags;
+     ErrorPrint (L"%a: Torizon UKI boot (Secure Boot %a)\r\n", __FUNCTION__, IsSecureBootEnabled () ? "enabled" : "disabled");
+ 
+     //
+@@ -1928,6 +2122,19 @@ LoadKernel:
+       }
+     }
+ 
++    //
++    // Anti-rollback limit: refuse a UKI with a security version below the
++    // minimum, as if its signature were bad.
++    //
++    if (mTorizonUkiBoot) {
++      Status = TorizonCheckSecurityVersion (KernelHandle);
++      if (EFI_ERROR (Status)) {
++        ErrorPrint (L"%a: Unable to boot image: %s %r\r\n", __FUNCTION__, BootOption->LinuxPath, Status);
++        gBS->UnloadImage (KernelHandle);
++        goto Exit;
++      }
++    }
++
+     if (NewArgs != NULL) {
+       // Set kernel arguments
+       Status = gBS->HandleProtocol (
