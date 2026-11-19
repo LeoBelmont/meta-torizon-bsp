@@ -117,7 +117,9 @@ if [ "$root" = "1" ]; then
 	else
 		pass "/usr is read-only"
 	fi
-	cfs="$(ls /sysroot/ostree/deploy/*/deploy/*/.ostree.cfs 2>/dev/null | head -n 1)"
+	# The composefs image of the booted deployment: "* <os> <checksum>.<serial>"
+	cfs="$(ostree admin status 2>/dev/null | sed -n 's|^\* \([^ ]*\) \([^ ]*\).*|/sysroot/ostree/deploy/\1/deploy/\2/.ostree.cfs|p')"
+	[ -e "$cfs" ] || cfs=""
 	if ! command -v fsverity >/dev/null 2>&1; then
 		skip "no fsverity tool to measure the composefs image"
 	elif [ -n "$cfs" ] && v="$(fsverity measure "$cfs" 2>/dev/null)"; then
