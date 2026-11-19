@@ -90,6 +90,8 @@ install_capsule() {
 	rc=0
 	mkdir -p "$esp/$(dirname "$ESP_FILE")" &&
 		cp "$cap" "$esp/$ESP_FILE" && sync && cmp -s "$cap" "$esp/$ESP_FILE" || rc=1
+	# No part of a capsule is left for the firmware to find
+	[ "$rc" = "0" ] || rm -f "$esp/$ESP_FILE"
 	if [ -n "$mounted" ]; then
 		umount "$esp" && rmdir "$esp"
 	fi
@@ -162,8 +164,9 @@ auto() {
 	if command -v fw_printenv >/dev/null 2>&1; then
 		flags="$(fw_printenv upgrade_available rollback 2>/dev/null | tr '\n' ' ')"
 		case "$flags" in
-		*upgrade_available=1*|*rollback=1*)
-			echo "the update is not confirmed ($flags): not installing the capsule yet"
+		*upgrade_available=0*rollback=0*) ;;
+		*)
+			echo "the update is not confirmed (${flags:-state unknown}): not installing the capsule yet"
 			return 0 ;;
 		esac
 	fi

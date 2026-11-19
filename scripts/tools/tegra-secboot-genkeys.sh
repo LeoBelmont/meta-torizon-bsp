@@ -101,6 +101,15 @@ fi
 # Root, intermediate and signing certificates, with the extensions of the
 # EDK2 test certificates (BaseTools/Source/Python/Pkcs7Sign/Readme.md)
 if missing "capsule/signer.pem"; then
+	# Not over a part of an earlier chain: a root that devices trust already
+	# must not be replaced by a new one
+	for f in root.key root.crt sub.key sub.crt; do
+		if [ -e "${keydir}/capsule/$f" ]; then
+			echo "${keydir}/capsule has $f but no signer.pem: not creating a new capsule key chain over it." >&2
+			echo "Restore signer.pem, or move the capsule directory away to create a new chain." >&2
+			exit 1
+		fi
+	done
 	c="${keydir}/capsule"
 	cat > "${c}/openssl.cnf" <<EOF
 [ req ]

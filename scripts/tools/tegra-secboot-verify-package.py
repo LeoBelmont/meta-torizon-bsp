@@ -231,11 +231,15 @@ class Package:
         """Make the named files available in self.dir, and say which are."""
         missing = [n for n in names if not os.path.exists(os.path.join(self.dir, n))]
         if missing and self.archive:
-            zstd = subprocess.Popen(['zstd', '-dc', self.archive], stdout=subprocess.PIPE)
-            subprocess.run(['tar', '-x', '-C', self.dir] + missing, stdin=zstd.stdout,
+            zstd = subprocess.Popen(['zstd', '-dc', self.archive], stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL)
+            # The names come from the package: "--" keeps tar from taking
+            # one as an option. tar fails for a name that is not there.
+            subprocess.run(['tar', '-x', '-C', self.dir, '--'] + missing, stdin=zstd.stdout,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             zstd.stdout.close()
-            zstd.wait()
+            if zstd.wait() not in (0, -13):
+                sys.exit('%s: cannot be read as a zstd archive' % self.archive)
         return [n for n in names if os.path.exists(os.path.join(self.dir, n))]
 
     def path(self, name):
