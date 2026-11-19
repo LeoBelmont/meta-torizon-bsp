@@ -148,7 +148,8 @@ Verified on the built images, and by booting the signed image in QEMU (`virt` ma
 - the kernel is locked down, loads the signed modules and refuses an unsigned one;
 - the initramfs takes the deployment from the `TorizonBootArgs` variable, and stops when the variable is missing or does not name an OSTree boot link;
 - composefs mounts the deployment in `signed` mode, refuses a replaced composefs image, and fs-verity reports a block changed behind the filesystem;
-- the system reaches the login prompt, and `ostree admin status` shows the booted deployment.
+- the system reaches the login prompt, and `ostree admin status` shows the booted deployment;
+- an update: a second signed commit deployed with `ostree admin deploy` boots with its own UKI, `uEnv.txt` keeps `uki=1` and lists the previous deployment as the second entry, and that one still boots afterwards. The update client and L4TLauncher were not part of this test.
 
 The capsule keys were only checked with the EDK2 capsule tool: a capsule signed with them verifies against the root certificate, and not against the EDK2 test certificate. The firmware configuration for the capsule certificate and for `TEGRA_SECBOOT_UEFI_MENU` was checked with the configuration tool of the firmware, not built.
 
