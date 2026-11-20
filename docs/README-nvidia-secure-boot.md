@@ -315,7 +315,14 @@ And on 2026-11-20, on the same device, with the images built from 4f6da1e, e8e8d
 
 The image built from ac7ba6c was pushed to Torizon Cloud with TorizonCore Builder, and the device registered with the `auto-provisioning` service of the image. No update was started from there yet.
 
-Still to be verified on a Jetson: an update through the update client (the updates above were deployed by hand), the reset of the initramfs when a deployment that is being tried does not mount, the rollback of an update that the health check refuses (`TEGRA_SECBOOT_TEST_HEALTH_CHECK`), a capsule below the lowest supported version, `TEGRA_SECBOOT_SSH = "0"`, `TEGRA_OPTEE_TA_PUBLIC_KEY`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
+And with the image built from a2e8c1c, with `TEGRA_OPTEE_TA_PUBLIC_KEY` set to a second key and `TEGRA_UEFI_FW_VERSION = "0x270202"`:
+
+- OP-TEE of that build holds the second key and not the one of the key set (`tegra-secboot-verify-package.py` fails for the key set, and passes with the second key in its place). On the device, the sample trusted application that the build signed with the key set is refused, and a copy of it signed with the second key loads;
+- a capsule of an earlier build, with the firmware version 0x270201, is refused: nothing is written, the last attempt status is 0x1010, with 0x270201 as the version of the attempt and 0x270202 as the lowest supported one. The capsule of the build itself installs.
+
+`TEGRA_UEFI_FW_VERSION` sets the version of the capsule and the lowest supported version, not the version that the running firmware reports, which stayed 0x270201. `nvbootctrl` then shows "Capsule update status: 2" after that capsule was installed and booted, and `tegra-secboot-capsule auto` would count it as refused. Raising the version for a release needs more than this variable; that is not worked out.
+
+Still to be verified on a Jetson: an update through the update client (the updates above were deployed by hand), the reset of the initramfs when a deployment that is being tried does not mount, the rollback of an update that the health check refuses (`TEGRA_SECBOOT_TEST_HEALTH_CHECK`), `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
