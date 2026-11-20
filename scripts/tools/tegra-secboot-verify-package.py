@@ -9,8 +9,9 @@ before it is flashed.
 
 PACKAGE is the .tegraflash-tar.zst file or the directory it was unpacked
 into. KEYDIR is a key directory in the layout of tegra-secboot-genkeys.sh;
-only its public parts are needed (uefi/*.crt, capsule/root.crt, and the
-OP-TEE key as optee/ta_sign_key.pem or optee/ta_sign_key.pub.pem).
+only its public parts are needed (uefi/*.crt, capsule/root.crt, the OP-TEE
+key as optee/ta_sign_key.pem or optee/ta_sign_key.pub.pem, and for a package
+with a signed boot chain bootchain/pkc.pem or bootchain/pkc.pub.pem).
 
 PASS/FAIL lines are the checks, and the exit status is 1 when one fails.
 SKIP lines are checks that could not be made, with the reason. Needs
@@ -35,6 +36,27 @@ import tempfile
 EFI_CERT_X509_GUID = bytes.fromhex('a159c0a5e494a74a87b5ab155c2bf072')
 MODULE_SIG_MARKER = b'~Module signature appended~\n'
 HALT_MESSAGE = b'does not boot a signed image'
+
+# Signed boot chain files of T234 (Orin), as the flashing tools of L4T R39.2.1
+# write them. NVIDIA does not document this layout: the offsets were read off
+# signed files, and the check fails on a file that is laid out otherwise.
+# An image has a header of NVDA_HEADER bytes: an RSASSA-PSS signature (SHA-512,
+# least significant byte first, like the modulus of its key) over the part of
+# the header from NVDA_SIGNED on, which holds the SHA-512 digests of what
+# follows the header. That is one payload of the length at NVDA_LENGTH, or,
+# when that is 0, the parts of the table at NVDA_PARTS.
+NVDA_HEADER = 0x2000
+NVDA_SIGNATURE = 0x90
+NVDA_KEY = 0xba0
+NVDA_SIGNED = 0xfc0
+NVDA_LENGTH = 0x1ee4
+NVDA_PARTS = 0x1400
+NVDA_PART_SIZE = 0xa0      # length at 4, offset in 512 byte sectors at 0x18, digest at 0x60
+# The table for the boot ROM (BR BCT): signature over its part from BCT_SIGNED on
+BCT_SIZE = 0x2000
+BCT_KEY = 0x44
+BCT_SIGNATURE = 0x204
+BCT_SIGNED = 0x1200
 
 fails = 0
 
@@ -241,6 +263,20 @@ class Package:
             if zstd.wait() not in (0, -13):
                 sys.exit('%s: cannot be read as a zstd archive' % self.archive)
         return [n for n in names if os.path.exists(os.path.join(self.dir, n))]
+
+    def fetch_matching(self, *patterns):
+        """Make the files that match the patterns available in self.dir. The
+        patterns are shell patterns of this script, and match in every
+        directory of the package."""
+        if not self.archive:
+            return
+        zstd = subprocess.Popen(['zstd', '-dc', self.archive], stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+        subprocess.run(['tar', '-x', '-C', self.dir, '--wildcards', '--'] + list(patterns), stdin=zstd.stdout,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        zstd.stdout.close()
+        if zstd.wait() not in (0, -13):
+            sys.exit('%s: cannot be read as a zstd archive' % self.archive)
 
     def path(self, name):
         return os.path.join(self.dir, name)
@@ -449,6 +485,179 @@ def rsa_modulus(path):
     return None
 
 
+def pss_verify(modulus, signature, message):
+    """Verify an RSASSA-PSS signature made with SHA-512 and MGF1 with SHA-512,
+    with a salt of any length and the exponent 65537. modulus and signature
+    are big endian."""
+    n = int.from_bytes(modulus, 'big')
+    s = int.from_bytes(signature, 'big')
+    if len(signature) != len(modulus) or s >= n:
+        return False
+    bits = n.bit_length() - 1
+    size = (bits + 7) // 8
+    em = pow(s, 65537, n).to_bytes(len(modulus), 'big')
+    if any(em[:len(modulus) - size]) or em[-1] != 0xbc or size < 64 + 2:
+        return False
+    em = em[-size:]
+    masked, digest = em[:size - 65], em[size - 65:-1]
+    mask = b''
+    counter = 0
+    while len(mask) < len(masked):
+        mask += hashlib.sha512(digest + counter.to_bytes(4, 'big')).digest()
+        counter += 1
+    db = bytearray(a ^ b for a, b in zip(masked, mask))
+    db[0] &= 0xff >> (8 * size - bits)
+    start = db.find(b'\x01')
+    if start < 0 or any(db[:start]):
+        return False
+    salt = bytes(db[start + 1:])
+    return hashlib.sha512(b'\0' * 8 + hashlib.sha512(message).digest() + salt).digest() == digest
+
+
+def nvda_check(data, pos, modulus, whole_file):
+    """What is wrong with the signed boot chain image at pos of data, or
+    None when its signature and payload digests verify with the key."""
+    key = modulus[::-1]
+    if data[pos:pos + 4] != b'NVDA' or len(data) < pos + NVDA_HEADER:
+        return 'not a signed image (no NVDA header)'
+    if data[pos + NVDA_KEY:pos + NVDA_KEY + len(key)] != key:
+        return 'signed with another key, or not signed'
+    signed = data[pos + NVDA_SIGNED:pos + NVDA_HEADER]
+    signature = data[pos + NVDA_SIGNATURE:pos + NVDA_SIGNATURE + len(key)][::-1]
+    if not pss_verify(modulus, signature, signed):
+        return 'the signature of the header does not verify'
+    length, = struct.unpack_from('<I', data, pos + NVDA_LENGTH)
+    parts = []
+    if length:
+        parts.append((NVDA_HEADER, length, None))
+        if whole_file and pos + NVDA_HEADER + length != len(data):
+            return 'the signed length is not the length of the file'
+    else:
+        for i in range((NVDA_LENGTH - NVDA_PARTS) // NVDA_PART_SIZE):
+            entry = pos + NVDA_PARTS + i * NVDA_PART_SIZE
+            part_length, = struct.unpack_from('<I', data, entry + 4)
+            sectors, = struct.unpack_from('<I', data, entry + 0x18)
+            if not part_length:
+                break
+            parts.append((sectors * 512, part_length, data[entry + 0x60:entry + 0xa0]))
+    if not parts:
+        return 'the header names no payload'
+    for offset, part_length, want in parts:
+        if offset < NVDA_HEADER or pos + offset + part_length > len(data):
+            return 'the payload is cut short'
+        digest = hashlib.sha512(data[pos + offset:pos + offset + part_length]).digest()
+        if (digest != want) if want else (digest not in signed):
+            return 'the payload does not have the digest in the signed header'
+    return None
+
+
+def bct_check(data, pos, modulus):
+    """The same for a table for the boot ROM (BR BCT)."""
+    key = modulus[::-1]
+    if data[pos:pos + 4] != b'BCTB' or len(data) < pos + BCT_SIZE:
+        return 'not a table for the boot ROM (no BCTB header)'
+    if data[pos + BCT_KEY:pos + BCT_KEY + len(key)] != key:
+        return 'signed with another key, or not signed'
+    signature = data[pos + BCT_SIGNATURE:pos + BCT_SIGNATURE + len(key)][::-1]
+    if not pss_verify(modulus, signature, data[pos + BCT_SIGNED:pos + BCT_SIZE]):
+        return 'the signature does not verify'
+    return None
+
+
+def bootchain_key(keydir):
+    for name in ('pkc.pem', 'pkc.pub.pem'):
+        path = os.path.join(keydir, 'bootchain', name)
+        if os.path.exists(path):
+            return name, rsa_modulus(path)
+    return None, None
+
+
+def check_bootchain(pkg, keydir):
+    """The boot chain before UEFI, when the package was signed at build time
+    (TEGRA_SECBOOT_BOOTCHAIN). Returns the modulus of the key when it was."""
+    pkg.fetch_matching('.presigning-vars', '*_sigheader*.signed', '*.bct')
+    if not os.path.exists(pkg.path('.presigning-vars')):
+        info('the boot chain is not signed in this package: it is for devices without fused boot chain keys')
+        return None
+    if pkg.env.get('CHIPID', '0x23') != '0x23':
+        skip('boot chain: the check only knows the signed files of T234 (Orin)')
+        return None
+    name, modulus = bootchain_key(keydir)
+    if not name:
+        skip('boot chain: signed in this package, but no bootchain/pkc.pem or bootchain/pkc.pub.pem in the key directory')
+        return None
+    if not modulus or len(modulus) != 384:
+        skip('boot chain: bootchain/%s is not an RSA-3072 key that openssl can read' % name)
+        return None
+    images, tables, bad = 0, 0, []
+    for root, _dirs, files in os.walk(pkg.dir):
+        for fn in sorted(files):
+            image = '_sigheader' in fn and fn.endswith('.signed')
+            if not image and not fn.endswith('.bct'):
+                continue
+            with open(os.path.join(root, fn), 'rb') as f:
+                data = f.read()
+            if image:
+                images += 1
+                error = nvda_check(data, 0, modulus, True)
+            elif data[:4] == b'BCTB':
+                tables += 1
+                error = bct_check(data, 0, modulus)
+            else:
+                continue
+            if error:
+                bad.append('%s: %s' % (os.path.relpath(os.path.join(root, fn), pkg.dir), error))
+    if not images or not tables:
+        fail('the package says its boot chain is signed, but has %d signed images and %d tables for the boot ROM'
+             % (images, tables))
+    elif bad:
+        fail('%d of the %d files of the boot chain do not verify with bootchain/%s, for example %s'
+             % (len(bad), images + tables, name, bad[0]))
+    else:
+        ok('the boot chain is signed with bootchain/%s: %d images and %d tables for the boot ROM '
+           '(signatures and payload digests)' % (name, images, tables))
+    info('a device only checks the signatures of the boot chain once the hash of that key is fused')
+    return modulus
+
+
+def check_capsule_bootchain(capsule, modulus):
+    """The boot chain images inside a capsule: they are stored as they are."""
+    with open(capsule, 'rb') as f:
+        data = f.read()
+    images, tables, other, bad = 0, 0, 0, []
+    for m in re.finditer(b'NVDA', data):
+        pos = m.start()
+        # The name of the image is in the header twice, or once for the
+        # image with several parts: tells a header from the same four letters
+        # elsewhere
+        tag = data[pos + NVDA_PARTS:pos + NVDA_PARTS + 4]
+        if not re.fullmatch(b'[A-Z0-9]{4}', tag) or \
+           data[pos + NVDA_LENGTH - 4:pos + NVDA_LENGTH] not in (tag, b'\0\0\0\0'):
+            continue
+        error = nvda_check(data, pos, modulus, False)
+        if error is None:
+            images += 1
+        elif error.startswith('signed with another key'):
+            other += 1
+        else:
+            bad.append('%s at 0x%x: %s' % (tag.decode(), pos, error))
+    for m in re.finditer(b'BCTB', data):
+        if bct_check(data, m.start(), modulus) is None:
+            tables += 1
+    if bad:
+        fail('%d boot chain image(s) in the capsule do not verify with the boot chain key, for example %s'
+             % (len(bad), bad[0]))
+    elif other:
+        fail('%d of the %d boot chain images in the capsule are not signed with the boot chain key'
+             % (other, images + other))
+    elif not images or not tables:
+        fail('no boot chain signed with the boot chain key in the capsule (%d images, %d tables for the boot ROM)'
+             % (images, tables))
+    else:
+        ok('the boot chain in the capsule is signed with the boot chain key: %d images and %d tables for '
+           'the boot ROM' % (images, tables))
+
+
 def check_optee(pkg, keydir):
     key = None
     for name in ('ta_sign_key.pem', 'ta_sign_key.pub.pem'):
@@ -536,11 +745,14 @@ def main():
         check_rootfs(pkg, args.keydir, tmp, unsigned_ok)
         check_kernel_partition(pkg)
         check_optee(pkg, args.keydir)
+        bootchain = check_bootchain(pkg, args.keydir)
         if args.capsule:
             if os.path.exists(os.path.join(args.keydir, 'capsule', 'root.crt')):
                 check_capsule(args.capsule, args.keydir, tmp)
             else:
                 skip('capsule: no capsule/root.crt in the key directory')
+            if bootchain:
+                check_capsule_bootchain(args.capsule, bootchain)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         pkg.cleanup()
