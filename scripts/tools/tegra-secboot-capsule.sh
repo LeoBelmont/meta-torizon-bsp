@@ -134,6 +134,11 @@ install_capsule() {
 # state NAME: the content of a state file, or nothing
 state() { cat "${STATE_DIR}/$1" 2>/dev/null; }
 
+# The boot chain the device runs from (A or B), or nothing
+current_slot() {
+	nvbootctrl dump-slots-info 2>/dev/null | sed -n 's/^Current bootloader slot: //p'
+}
+
 auto() {
 	cap="${1:-$DEFAULT_CAPSULE}"
 	[ "$(id -u)" = "0" ] || die "run as root"
@@ -145,17 +150,34 @@ auto() {
 	sum="$(sha256sum "$cap" | cut -d' ' -f1)"
 	boot="$(cat /proc/sys/kernel/random/boot_id)"
 
-	# A capsule staged in an earlier boot: record what the firmware did with it
+	# A capsule staged in an earlier boot: record what the firmware did with
+	# it. An installed capsule makes the device run from the other boot
+	# chain. The status alone is not enough: it is 1 too when the power was
+	# cut while the firmware was writing, and the device then still runs
+	# from the boot chain it had.
 	if [ -n "$(state staged)" ] && [ "$(state staged-boot)" != "$boot" ]; then
 		staged="$(state staged)"
-		rm -f "${STATE_DIR}/staged" "${STATE_DIR}/staged-boot"
-		if nvbootctrl dump-slots-info 2>/dev/null | grep -q "^Capsule update status: 1"; then
-			echo "$staged" > "${STATE_DIR}/installed"
-			rm -f "${STATE_DIR}/failed"
-			echo "the capsule ${staged%${staged#????????????}} was installed"
-		else
+		slot="$(state staged-slot)"
+		rm -f "${STATE_DIR}/staged" "${STATE_DIR}/staged-boot" "${STATE_DIR}/staged-slot"
+		if ! nvbootctrl dump-slots-info 2>/dev/null | grep -q "^Capsule update status: 1"; then
 			echo "$staged" > "${STATE_DIR}/failed"
+			rm -f "${STATE_DIR}/interrupted"
 			echo "the firmware did not install the capsule ${staged%${staged#????????????}}: see \"status\"" >&2
+		elif [ -n "$slot" ] && [ "$(current_slot)" = "$slot" ]; then
+			tries="$(state interrupted)"
+			tries=$(( ${tries:-0} + 1 ))
+			if [ "$tries" -ge 3 ]; then
+				echo "$staged" > "${STATE_DIR}/failed"
+				rm -f "${STATE_DIR}/interrupted"
+				echo "the capsule ${staged%${staged#????????????}} was not installed in $tries attempts: not trying again" >&2
+			else
+				echo "$tries" > "${STATE_DIR}/interrupted"
+				echo "the installation of the capsule ${staged%${staged#????????????}} did not finish: trying again" >&2
+			fi
+		else
+			echo "$staged" > "${STATE_DIR}/installed"
+			rm -f "${STATE_DIR}/failed" "${STATE_DIR}/interrupted"
+			echo "the capsule ${staged%${staged#????????????}} was installed"
 		fi
 	fi
 
@@ -191,6 +213,7 @@ auto() {
 	install_capsule "$cap" || return 1
 	echo "$sum" > "${STATE_DIR}/staged"
 	echo "$boot" > "${STATE_DIR}/staged-boot"
+	current_slot > "${STATE_DIR}/staged-slot"
 }
 
 case "$1" in
