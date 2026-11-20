@@ -90,6 +90,8 @@ $ scripts/tools/tegra-secboot-verify-package.py [--capsule tegra-bl.cap] <packag
 
 It checks the certificates in the key overlay, the signatures of the boot loader and of the boot image, that the boot image is a UKI, the signatures of the kernel modules, the image of the kernel partition and the trusted application key in OP-TEE, and exits with 1 when one of them fails. It only needs the public parts of the key directory.
 
+For a package built with a signed boot chain (`TEGRA_SECBOOT_BOOTCHAIN`, see "Boot chain signing and fusing") it also verifies every signed file of the boot chain with `bootchain/pkc.pem`, or with its public part as `bootchain/pkc.pub.pem`: the signature of the header and the digests of the payload, for the files in the package and, with `--capsule`, for the ones inside the capsule. This is the only check of these signatures before a device is fused: a device without the fuses boots the files whatever their signatures are. NVIDIA does not document the layout of the signed files, so the check was written from the files of L4T R39.2.1 for Orin, built without the SBK, and fails on files that are laid out otherwise.
+
 `scripts/tools/tegra-secboot-flash.sh` flashes one device in recovery mode and says whether it worked:
 
 ```
@@ -210,7 +212,7 @@ The keys for it are in `bootchain/` of the key directory, created with `tegra-se
 | `oem_k1.key`, `oem_k2.key` | Fuse keys OemK1 and OemK2. OemK1 is the key of the EKB, the blob that OP-TEE reads its keys from. |
 | `ekb_auth.key`, `ekb_sym2.key` | Keys inside the EKB: for the authentication of the UEFI variables, and for disk encryption |
 
-The steps, of which only the first three were tried, on a build host, and none on a device:
+No fuse was burned and no fuse command was sent to a device for any of this. Steps 1 and 2 were tried as far as writing the file and comparing the hashes, on a build host. The build of step 3 was flashed on a device without fused keys, which boots it without checking its signatures (see "Test status"); step 4 was not done.
 
 1. Write the fuse configuration file:
 
@@ -223,7 +225,7 @@ The steps, of which only the first three were tried, on a build host, and none o
 
 2. Burn it with NVIDIA's L4T kit, first with `--test`: NVIDIA documents two tools for Orin, `odmfuse.sh -X fuse.xml`, which with `--test` does everything except burning, and `fskp_fuseburn.py`, which makes a fuse blob that, made with `--test`, is sent to the device without burning anything. See the quick start of NVIDIA's [Secure Boot](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/SecureBoot.html) documentation, and [FSKP](https://docs.nvidia.com/jetson/archives/r39.2.1/DeveloperGuide/SD/Security/FSKP.html) for a blob that is encrypted for the factory.
 
-3. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"`, and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused. meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the capsule, so the flashing host needs no key. With OemK1 fused, also set `TEGRA_SECBOOT_EKB = "1"`: the EKB is then built with OemK1 and the keys of the key set. Without it, a device with OemK1 fused does not get past its firmware; with it, a device without OemK1 fused does not either.
+3. Build with the boot chain signed: `TEGRA_SECBOOT_BOOTCHAIN = "1"`, and `TEGRA_SECBOOT_BOOTCHAIN_SBK = "1"` if the SBK is fused. meta-tegra then signs the boot chain (`TEGRA_SIGNING_ARGS`) in the flash package and in the capsule, so the flashing host needs no key. With OemK1 fused, also set `TEGRA_SECBOOT_EKB = "1"`: the EKB is then built with OemK1 and the keys of the key set. Without it, a device with OemK1 fused does not get past its firmware; with it, a device without OemK1 fused does not either. `tegra-secboot-verify-package.py` verifies the signatures of the boot chain in the package and in the capsule on the host. A package with a signed boot chain is flashed like any other, also on a device without fused keys: the flashing script does not look at the fuses then, and such a device boots it without checking the signatures.
 
 4. Burn the fuses of one device you can afford to lose, with a blob made with `--burn`, flash it with that build, and check that it boots, and that it refuses a package that is unsigned or signed with another key.
 
@@ -294,12 +296,21 @@ And with the image built from e8e8d49, which has the hardening of L4TLauncher fr
 
 `tegra-secboot-flash.sh` flashed that device several times without any help.
 
+And with the image built from ac7ba6c with `TEGRA_SECBOOT_BOOTCHAIN = "1"`, on the same device, still without fused keys:
+
+- the boot chain files of the package and of the capsule are signed with `bootchain/pkc.pem`, and `tegra-secboot-verify-package.py` verifies all of them (78 images and 6 tables for the boot ROM in the package, 22 and 5 in the capsule); with one bit changed in a payload, in a signed header or in a table, with another key, and with the capsule of a build without a signed boot chain, it fails;
+- the device accepts the signed boot chain in recovery mode, is flashed, and boots from it with the same messages as with an unsigned one. `tegra-secboot-check.sh` passes, the minimum security version is raised, and the sample trusted application runs;
+- `tegra-secboot-capsule install` with the capsule of that image and a reboot write the other boot chain, signed too, and the device boots from it.
+
+This shows that the signed build works on a device that does not enforce the signatures. That a fused device accepts it, and refuses others, is not shown.
+
 Still to be verified on a Jetson: the update client (the updates above were deployed by hand), a capsule that the timer installs after a real update, `TEGRA_SECBOOT_SSH = "0"`, the signed kernel started on its own after the forced command line, and everything that needs the boot chain keys fused.
 
 Limitations and open points
 ---------------------------
 
 - **Flashing is not restricted without fused boot chain keys**: see "Build". Disabling the recovery path for production devices needs the fuses.
+- **A signed boot chain is not checked without the fuses**: a device without fused keys boots the build with `TEGRA_SECBOOT_BOOTCHAIN` like any other, so a boot test on it says nothing about the signatures. `tegra-secboot-verify-package.py` checks them on the host.
 - **Other boot options after a failed boot**: when L4TLauncher refuses the boot image, the firmware of a default build tries its remaining boot options (network boot, and the shell). Secure Boot still checks what they load. With `TEGRA_SECBOOT_UEFI_MENU = "0"` they are not in the firmware, and it halts.
 - **Kernel arguments from the firmware**: with a UKI, the arguments the UEFI firmware appends are dropped, as the command line is fixed. On the Orin Nano these are `video=efifb:off`, which `KERNEL_ARGS` has already, the boot profiler and debug data pointers (`bl_prof_dataptr`, `bl_prof_ro_ptr`, `bl_debug_data`), and the `KernelCommandLine` variable of the setup menu. Confirmed on an Orin Nano: `bl_prof_dataptr` and `bl_prof_ro_ptr` are on the command line of an unsigned image and not on that of a signed one.
 - **Lockdown**: integrity mode blocks e.g. `/dev/mem`, unsigned kexec and debugfs. On an Orin Nano this stops the debugfs writes of `nvpower.sh`; `nvpmodel` and `nvfancontrol` work. Check the other NVIDIA tools in use (`jetson_clocks`, ...).
