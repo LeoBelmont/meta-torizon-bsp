@@ -215,6 +215,12 @@ IMAGE_INSTALL:append = " tegra-secboot-check"
 TEGRA_SECBOOT_TEST_TA ?= "0"
 IMAGE_INSTALL:append = "${@' optee-nvsamples-hwkey-agent' if d.getVar('TEGRA_SECBOOT_TEST_TA') == '1' else ''}"
 
+# For test images: a health check that fails for the deployment whose checksum
+# is written to /var/lib/tegra-secboot/fail-health-check, to test the rollback
+# of an update that boots and is then found unhealthy
+TEGRA_SECBOOT_TEST_HEALTH_CHECK ?= "0"
+IMAGE_INSTALL:append = "${@' tegra-secboot-check-test-health-check' if d.getVar('TEGRA_SECBOOT_TEST_HEALTH_CHECK') == '1' else ''}"
+
 # Kernel lockdown in integrity mode. Set to "0" if it gets in the way of
 # NVIDIA tools that need /dev/mem or debugfs, while that is investigated.
 TEGRA_SECBOOT_LOCKDOWN ?= "1"
