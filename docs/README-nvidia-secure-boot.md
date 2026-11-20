@@ -2,7 +2,7 @@ Secure Boot on NVIDIA Jetson
 ============================
 
 > [!WARNING]
-> Draft: validated in QEMU up to the login prompt (see "Test status"), not yet on a Jetson. Do not fuse production devices with it.
+> Draft: tested in QEMU and on a Jetson Orin Nano Developer Kit whose boot chain keys are not fused (see "Test status"). Nothing here was tested on a fused device. Do not fuse production devices with it.
 
 Torizon OS enables Secure Boot on Jetson the same way as on the Toradex SoMs, with the `torizon-signed` class. On Jetson, the class uses UEFI Secure Boot with a signed Unified Kernel Image (UKI), and composefs to verify the root filesystem.
 
@@ -52,7 +52,7 @@ This creates:
 | `modsign/` | `modsign_key.pem` | Signing the kernel modules. |
 | `optee/` | `ta_sign_key.pem` | Signing the OP-TEE trusted applications. OP-TEE is built with its public part. |
 | `capsule/` | `root`, `sub` (`.key` and `.crt`), `signer.pem` | Signing the firmware update capsules. The firmware is built with `root.crt`, and the build signs with `signer.pem`. |
-| `bootchain/` | `pkc.pem`, `sbk.key` | Only with `--bootchain`: signing and encrypting the Tegra boot chain. They only take effect once fused. |
+| `bootchain/` | `pkc.pem`, `pkc1.pem`, `pkc2.pem`, `sbk.key`, `oem_k1.key`, `oem_k2.key`, `ekb_auth.key`, `ekb_sym2.key` | Only with `--bootchain`: signing and encrypting the Tegra boot chain, and the keys of the EKB. See "Boot chain signing and fusing". They only take effect once fused. |
 
 The script keeps the keys that a directory has already and creates the missing ones, so run it again on an existing key directory when a newer version of the layer needs more keys. The build stops when a key is missing.
 
@@ -134,7 +134,7 @@ OP-TEE trusted applications
 
 OP-TEE only loads trusted applications signed with `optee/ta_sign_key.pem`. The ones that meta-tegra builds are signed with it by the build. Build other trusted applications with the same `TA_SIGN_KEY`. Torizon OS installs none by default.
 
-`TEGRA_SECBOOT_TEST_TA = "1"` installs NVIDIA's sample trusted application (`hwkey-agent`) and its client (`nvhwkey-app`), to test on a device that OP-TEE loads a trusted application signed with the key. It is for test images, and has not been built or run yet.
+`TEGRA_SECBOOT_TEST_TA = "1"` installs NVIDIA's sample trusted application (`hwkey-agent`) and its client (`nvhwkey-app`), to test on a device that OP-TEE loads a trusted application signed with the key. It is for test images. Tested on an Orin Nano: see "Test status".
 
 When the owner of the trusted applications signs them elsewhere and keeps the private key, set `TEGRA_OPTEE_TA_PUBLIC_KEY` to the public key (PEM). OP-TEE then verifies trusted applications with that key, and the ones this build signs with `optee/ta_sign_key.pem` do not load.
 
